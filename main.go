@@ -162,49 +162,91 @@ func resolveItem(ctx context.Context, client *silo.Client, dataset mapping.Datas
 	out := map[int]int{}
 	switch item.Type {
 	case "movie":
-		addMappings(out, dataset, item, -1, 1)
+		err = addMappings(out, dataset, item, -1, 1)
 	case "episode":
-		series, err := client.GetItem(ctx, profileID, item.SeriesID)
-		if err != nil {
-			return nil, fmt.Errorf("resolve parent series: %w", err)
+		series, resolveErr := client.GetItem(ctx, profileID, item.SeriesID)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve parent series: %w", resolveErr)
 		}
 		if item.SeasonNumber != nil && item.EpisodeNumber != nil {
-			addMappings(out, dataset, series, *item.SeasonNumber, *item.EpisodeNumber)
+			err = addMappings(out, dataset, series, *item.SeasonNumber, *item.EpisodeNumber)
 		}
 	case "season":
-		series, err := client.GetItem(ctx, profileID, item.SeriesID)
-		if err != nil {
-			return nil, fmt.Errorf("resolve parent series: %w", err)
+		series, resolveErr := client.GetItem(ctx, profileID, item.SeriesID)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve parent series: %w", resolveErr)
 		}
 		if item.SeasonNumber != nil && item.EpisodeCount != nil {
-			addMappings(out, dataset, series, *item.SeasonNumber, *item.EpisodeCount)
+			err = addMappings(out, dataset, series, *item.SeasonNumber, *item.EpisodeCount)
 		}
 	case "series":
-		episodes, err := client.GetEpisodes(ctx, profileID, item.ContentID)
-		if err != nil {
-			return nil, fmt.Errorf("list series episodes: %w", err)
+		episodes, resolveErr := client.GetEpisodes(ctx, profileID, item.ContentID)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("list series episodes: %w", resolveErr)
 		}
 		for _, episode := range episodes {
-			addMappings(out, dataset, item, episode.SeasonNumber, episode.EpisodeNumber)
+			if err = addMappings(out, dataset, item, episode.SeasonNumber, episode.EpisodeNumber); err != nil {
+				break
+			}
 		}
+	}
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
 
-func addMappings(out map[int]int, dataset mapping.Dataset, item silo.Item, season, episode int) {
-	providers := [][2]string{{"tvdb", item.TvdbID}, {"tmdb", item.TmdbID}, {"imdb", item.ImdbID}}
+func addMappings(out map[int]int, dataset mapping.Dataset, item silo.Item, season, episode int) error {
+	providers := [][2]string{{"tvdb", item.TvdbID}, {"tmdb", item.TmdbID}}
+	var resolved map[int]int
 	for _, provider := range providers {
-		targets, err := dataset.Resolve(provider[0], provider[1], season, episode)
-		if err != nil || len(targets) == 0 {
+		if provider[1] == "" {
 			continue
 		}
-		for _, target := range targets {
-			if target.Episode > out[target.AniListID] {
-				out[target.AniListID] = target.Episode
-			}
+		targets, err := dataset.Resolve(provider[0], provider[1], season, episode)
+		if err != nil {
+			return err
 		}
-		return
+		if len(targets) == 0 {
+			continue
+		}
+		candidate := make(map[int]int, len(targets))
+		for _, target := range targets {
+			candidate[target.AniListID] = target.Episode
+		}
+		if resolved != nil && !sameTargets(resolved, candidate) {
+			return fmt.Errorf("AniBridge mappings disagree between Silo provider IDs for season %d episode %d", season, episode)
+		}
+		resolved = candidate
 	}
+	if resolved == nil && season < 0 && item.ImdbID != "" {
+		targets, err := dataset.Resolve("imdb", item.ImdbID, season, episode)
+		if err != nil {
+			return err
+		}
+		resolved = make(map[int]int, len(targets))
+		for _, target := range targets {
+			resolved[target.AniListID] = target.Episode
+		}
+	}
+	for id, progress := range resolved {
+		if progress > out[id] {
+			out[id] = progress
+		}
+	}
+	return nil
+}
+
+func sameTargets(a, b map[int]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id, progress := range a {
+		if b[id] != progress {
+			return false
+		}
+	}
+	return true
 }
 
 func main() {

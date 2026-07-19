@@ -28,17 +28,18 @@ func TestResolveIdentityMapping(t *testing.T) {
 	}
 }
 
-func TestResolveRatiosAndDiscontinuousTargets(t *testing.T) {
+func TestResolveRatios(t *testing.T) {
 	cases := []struct {
 		name    string
 		ranges  map[string]string
 		episode int
 		want    int
+		ok      bool
 	}{
-		{"two targets per source", map[string]string{"1-12": "1-24|2"}, 3, 6},
-		{"two sources per target", map[string]string{"1-12": "1-6|-2"}, 4, 2},
-		{"discontinuous", map[string]string{"1-6": "1-3,5-7"}, 4, 5},
-		{"open ended", map[string]string{"4-": "10-"}, 6, 12},
+		{"two sources per target waits for boundary", map[string]string{"1-4": "20-21|2"}, 1, 0, false},
+		{"two sources per target", map[string]string{"1-4": "20-21|2"}, 2, 20, true},
+		{"three targets per source", map[string]string{"1-2": "20-25|-3"}, 1, 22, true},
+		{"open ended", map[string]string{"4-": "10-"}, 6, 12, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -46,17 +47,25 @@ func TestResolveRatiosAndDiscontinuousTargets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !ok || got != tc.want {
-				t.Fatalf("mapEpisode() = %d, %v; want %d, true", got, ok, tc.want)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("mapEpisode() = %d, %v; want %d, %v", got, ok, tc.want, tc.ok)
 			}
 		})
 	}
 }
 
+func TestRejectsNonContiguousTarget(t *testing.T) {
+	if _, _, err := mapEpisode(map[string]string{"1-6": "1-3,5-7"}, 4); err == nil {
+		t.Fatal("expected non-contiguous target to be rejected")
+	}
+}
+
 func TestMovieDescriptor(t *testing.T) {
-	dataset := Dataset{"tmdb_movie:1": {"anilist:2": {}}}
-	targets, err := dataset.Resolve("tmdb", "1", -1, 1)
-	if err != nil || len(targets) != 1 || targets[0].AniListID != 2 {
-		t.Fatalf("targets = %#v, err = %v", targets, err)
+	for _, provider := range []string{"tmdb", "tvdb"} {
+		dataset := Dataset{provider + "_movie:1": {"anilist:2": {}}}
+		targets, err := dataset.Resolve(provider, "1", -1, 1)
+		if err != nil || len(targets) != 1 || targets[0].AniListID != 2 {
+			t.Fatalf("%s targets = %#v, err = %v", provider, targets, err)
+		}
 	}
 }

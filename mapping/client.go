@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -43,6 +45,19 @@ func (c *Client) Dataset(ctx context.Context) (Dataset, error) {
 		return c.dataset, nil
 	}
 
+	dataset, err := c.download(ctx)
+	if err != nil {
+		if c.dataset != nil {
+			return c.dataset, nil
+		}
+		return nil, err
+	}
+	c.dataset = dataset
+	c.loadedAt = time.Now()
+	return dataset, nil
+}
+
+func (c *Client) download(ctx context.Context) (Dataset, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create mappings request: %w", err)
@@ -55,10 +70,24 @@ func (c *Client) Dataset(ctx context.Context) (Dataset, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download AniBridge mappings: HTTP %d", resp.StatusCode)
 	}
-
+	const maxMappingsSize = 64 << 20
+	limited := io.LimitReader(resp.Body, maxMappingsSize+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("read AniBridge mappings: %w", err)
+	}
+	if len(data) > maxMappingsSize {
+		return nil, fmt.Errorf("AniBridge mappings exceed %d bytes", maxMappingsSize)
+	}
 	var raw map[string]json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("decode AniBridge mappings: %w", err)
+	}
+	var metadata struct {
+		SchemaVersion string `json:"schema_version"`
+	}
+	if err := json.Unmarshal(raw["$meta"], &metadata); err != nil || !strings.HasPrefix(metadata.SchemaVersion, "3.") {
+		return nil, fmt.Errorf("unsupported AniBridge schema version %q", metadata.SchemaVersion)
 	}
 	dataset := make(Dataset, len(raw)-1)
 	for descriptor, encoded := range raw {
@@ -71,7 +100,5 @@ func (c *Client) Dataset(ctx context.Context) (Dataset, error) {
 		}
 		dataset[descriptor] = targets
 	}
-	c.dataset = dataset
-	c.loadedAt = time.Now()
 	return dataset, nil
 }

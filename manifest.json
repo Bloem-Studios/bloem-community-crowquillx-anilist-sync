@@ -1,6 +1,6 @@
 {
   "plugin_id": "dev.crowquillx.anilist-sync",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
   "supported_platforms": [
@@ -52,7 +52,7 @@
     "display_name": "AniList Sync",
     "summary": "Update AniList episode progress when anime is marked watched in Silo.",
     "description_markdown": "Consumes Silo watched-state events, resolves episode-level mappings with the daily AniBridge mapping dataset, and advances the configured AniList account without reducing existing progress.",
-    "setup_markdown": "1. Create an AniList OAuth access token.\n2. Create a Silo API key for the account that owns the profile.\n3. Configure both secrets above.\n4. Optionally set the Silo profile ID when the server has multiple profiles.\n\nThe current Silo plugin API provides configuration globally, so install one instance per AniList account.",
+    "setup_markdown": "1. Create an AniList OAuth access token.\n2. Create a Silo API key for the account that owns the profile.\n3. Configure both secrets above.\n4. Optionally set the Silo profile ID when the server has multiple profiles.\n\nThe current Silo plugin API provides configuration globally, so this release supports one AniList account per Silo server.",
     "homepage_url": "https://github.com/crowquillx/silo-anilist-sync",
     "source_url": "https://github.com/crowquillx/silo-anilist-sync",
     "support_url": "https://github.com/crowquillx/silo-anilist-sync/issues",

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -26,6 +27,7 @@ type mediaResponse struct {
 		Media struct {
 			Episodes       *int `json:"episodes"`
 			MediaListEntry *struct {
+				ID       int    `json:"id"`
 				Progress int    `json:"progress"`
 				Status   string `json:"status"`
 			} `json:"mediaListEntry"`
@@ -49,24 +51,41 @@ func (c *Client) AdvanceProgress(ctx context.Context, mediaID, progress int) err
 		return nil
 	}
 	var current mediaResponse
-	query := `query ($id: Int!) { Media(id: $id, type: ANIME) { episodes mediaListEntry { progress status } } }`
+	query := `query ($id: Int!) { Media(id: $id, type: ANIME) { episodes mediaListEntry { id progress status } } }`
 	if err := c.do(ctx, query, map[string]any{"id": mediaID}, &current); err != nil {
 		return err
 	}
+	episodes := current.Data.Media.Episodes
+	if episodes != nil && *episodes > 0 && progress > *episodes {
+		return fmt.Errorf("mapped progress %d exceeds AniList episode count %d", progress, *episodes)
+	}
 	entry := current.Data.Media.MediaListEntry
-	if entry != nil && (entry.Status == "COMPLETED" || entry.Progress >= progress) {
+	if entry == nil {
+		status := "CURRENT"
+		if episodes != nil && progress == *episodes {
+			status = "COMPLETED"
+		}
+		mutation := `mutation ($mediaId: Int!, $progress: Int!, $status: MediaListStatus!) { SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status) { id } }`
+		return c.do(ctx, mutation, map[string]any{"mediaId": mediaID, "progress": progress, "status": status}, &struct{}{})
+	}
+	if entry.Status == "COMPLETED" || entry.Progress >= progress {
 		return nil
 	}
-	status := "CURRENT"
-	if current.Data.Media.Episodes != nil && *current.Data.Media.Episodes > 0 && progress >= *current.Data.Media.Episodes {
-		progress = *current.Data.Media.Episodes
-		status = "COMPLETED"
+	status := entry.Status
+	switch entry.Status {
+	case "PLANNING":
+		status = "CURRENT"
+	case "CURRENT":
+		if episodes != nil && progress == *episodes {
+			status = "COMPLETED"
+		}
 	}
-	mutation := `mutation ($id: Int!, $progress: Int!, $status: MediaListStatus!) { SaveMediaListEntry(mediaId: $id, progress: $progress, status: $status) { id } }`
-	var result struct {
-		Errors []graphQLError `json:"errors"`
+	if status == entry.Status {
+		mutation := `mutation ($id: Int!, $progress: Int!) { SaveMediaListEntry(id: $id, progress: $progress) { id } }`
+		return c.do(ctx, mutation, map[string]any{"id": entry.ID, "progress": progress}, &struct{}{})
 	}
-	return c.do(ctx, mutation, map[string]any{"id": mediaID, "progress": progress, "status": status}, &result)
+	mutation := `mutation ($id: Int!, $progress: Int!, $status: MediaListStatus!) { SaveMediaListEntry(id: $id, progress: $progress, status: $status) { id } }`
+	return c.do(ctx, mutation, map[string]any{"id": entry.ID, "progress": progress, "status": status}, &struct{}{})
 }
 
 func (c *Client) do(ctx context.Context, query string, variables map[string]any, out any) error {
@@ -88,18 +107,21 @@ func (c *Client) do(ctx context.Context, query string, variables map[string]any,
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("call AniList: HTTP %d", resp.StatusCode)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("decode AniList response: %w", err)
-	}
-	raw, err := json.Marshal(out)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return nil
+		return fmt.Errorf("read AniList response: %w", err)
 	}
 	var envelope struct {
 		Errors []graphQLError `json:"errors"`
 	}
-	if err := json.Unmarshal(raw, &envelope); err == nil && len(envelope.Errors) > 0 {
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode AniList response: %w", err)
+	}
+	if len(envelope.Errors) > 0 {
 		return fmt.Errorf("AniList GraphQL: %s", envelope.Errors[0].Message)
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("decode AniList response data: %w", err)
 	}
 	return nil
 }

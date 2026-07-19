@@ -46,6 +46,9 @@ func sourceDescriptor(provider, id string, season int) string {
 	}
 	switch strings.ToLower(provider) {
 	case "tvdb":
+		if season < 0 {
+			return "tvdb_movie:" + id
+		}
 		return fmt.Sprintf("tvdb_show:%s:s%d", id, season)
 	case "tmdb":
 		if season < 0 {
@@ -108,31 +111,28 @@ func projectEpisode(spec string, sourceOffset int) (int, bool, error) {
 			return 0, false, fmt.Errorf("invalid target ratio %q", spec)
 		}
 	}
-	segments := strings.Split(parts[0], ",")
-	values := make([]int, 0)
-	for _, segment := range segments {
-		start, end, err := parseRange(segment)
-		if err != nil {
-			return 0, false, err
-		}
-		if end == 0 {
-			if ratio > 0 {
-				return start + (sourceOffset+1)*ratio - 1, true, nil
-			}
-			return start + sourceOffset/(-ratio), true, nil
-		}
-		for n := start; n <= end; n++ {
-			values = append(values, n)
-		}
+	if strings.Contains(parts[0], ",") {
+		return 0, false, fmt.Errorf("non-contiguous target range %q is not representable as AniList progress", spec)
 	}
+	start, end, err := parseRange(parts[0])
+	if err != nil {
+		return 0, false, err
+	}
+
 	index := sourceOffset
-	if ratio > 0 {
-		index = (sourceOffset+1)*ratio - 1
-	} else {
-		index = sourceOffset / (-ratio)
+	switch {
+	case ratio > 1:
+		consumed := sourceOffset + 1
+		if consumed%ratio != 0 {
+			return 0, false, nil
+		}
+		index = consumed/ratio - 1
+	case ratio < 0:
+		index = (sourceOffset+1)*(-ratio) - 1
 	}
-	if index < 0 || index >= len(values) {
+	mapped := start + index
+	if end > 0 && mapped > end {
 		return 0, false, nil
 	}
-	return values[index], true, nil
+	return mapped, true, nil
 }
