@@ -68,7 +68,7 @@ https://github.com/crowquillx/silo-anilist-sync/releases/latest/download/reposit
 
 Every `v*` tag builds all supported binaries, calculates their SHA-256
 checksums, embeds the release manifest in the plugin's repository index, and
-publishes all assets. The shared catalog refreshes from that signed release
+publishes all assets. The shared catalog refreshes from that versioned release
 boundary. Silo selects the binary for its platform and verifies its checksum
 before installation. Repository installations default to Silo's automatic
 update policy; operators may instead select notification-only or manual
