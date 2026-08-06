@@ -29,3 +29,14 @@ jobs:
           jq -e '.pluginId == "dev.crowquillx.anilist-sync"' /tmp/manifest.json
         env:
           CGO_ENABLED: "0"
+      - name: Build release binaries
+        run: make build-all VERSION="$(jq -r '.version' manifest.json)"
+      - name: Generate Silo repository index
+        run: |
+          sha256sum dist/plugin-* > dist/checksums.txt
+          ./scripts/generate-repository-index.sh "$(jq -r '.version' manifest.json)" dist dist/repository.json
+          jq -e '.plugins[0].manifest.plugin_id == "dev.crowquillx.anilist-sync"' dist/repository.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-build-${{ github.sha }}
+          path: dist/

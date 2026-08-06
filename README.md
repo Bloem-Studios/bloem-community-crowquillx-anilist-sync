@@ -11,9 +11,9 @@ Plugin-backed watch providers landed in Silo Server through
 Until a Silo release includes that host adapter, this plugin requires a Silo
 build from current `main`.
 
-The latest published plugin release, `v0.1.1`, still uses the legacy
-event-consumer integration. Build this repository from `main` until a `v0.3.x`
-release is published.
+The `v0.1.x` release line uses the legacy event-consumer integration. Use
+`v0.3.x` or a build from `main` for the host-owned watch-provider integration
+described below.
 
 ## Features
 
@@ -29,11 +29,10 @@ release is published.
 
 ## Setup
 
-1. Build the plugin from `main` using `make build`.
-2. Create an AniList OAuth application under
+1. Add the repository URL below to Silo's plugin repositories.
+2. Install **AniList Sync** from Silo's plugin catalog.
+3. Create an AniList OAuth application under
    [AniList developer settings](https://anilist.co/settings/developer).
-3. Install the resulting `plugin` binary through Silo's plugin administration
-   flow.
 4. Enter the AniList client ID and client secret in the plugin settings.
 5. Set **Playback completion threshold** to the same watched percentage used by
    Silo.
@@ -50,6 +49,23 @@ release is published.
 | Client secret | Required | AniList OAuth application secret; Silo stores it as a secret. |
 | Sync manually marked watched items | Off | Also export items marked watched without completed playback. |
 | Playback completion threshold | 90% | Percentage playback must exceed before AniList progress advances; valid range 1–99. |
+
+## Install and update through Silo
+
+Add this stable repository index URL to Silo:
+
+```text
+https://github.com/crowquillx/silo-anilist-sync/releases/latest/download/repository.json
+```
+
+Every `v*` tag builds all supported binaries, calculates their SHA-256
+checksums, embeds the release manifest in `repository.json`, and publishes all
+of them as GitHub release assets. Silo selects the binary for its platform and
+verifies the checksum before installation.
+
+Repository installations default to Silo's automatic update policy. Silo can
+therefore discover and install newer versions from the same stable index URL;
+operators may instead select the notification-only or manual policy in Silo.
 
 ## Architecture
 
@@ -135,6 +151,14 @@ On NixOS:
 ```fish
 nix shell nixpkgs#go --command fish -c 'CGO_ENABLED=0 go test ./...'
 ```
+
+### Releases
+
+Set the target version in `manifest.json`, then push the matching `vX.Y.Z` tag.
+The release workflow validates that the tag and manifest agree, cross-compiles
+every supported platform, publishes checksums and binaries, and generates the
+`repository.json` consumed by Silo. The regular CI workflow performs the same
+cross-build and index-generation checks on pull requests and `main`.
 
 ## Privacy and upstream services
 
