@@ -55,7 +55,7 @@ described below.
 Add the shared crowquillx plugin catalog URL to Silo:
 
 ```text
-https://raw.githubusercontent.com/crowquillx/silo-plugin-catalog/main/repository.json
+https://raw.githubusercontent.com/crowquillx/crowquillx-silo-plugins/main/repository.json
 ```
 
 The shared catalog contains AniList Sync and can add future crowquillx plugins
