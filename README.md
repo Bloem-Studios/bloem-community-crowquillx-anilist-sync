@@ -2,12 +2,54 @@
 
 An AniList watch-sync provider for [Silo Server](https://github.com/Silo-Server/silo-server).
 
-> **Development status:** this branch targets the `watch_sync_provider.v1`
-> contract on the main branches of
-> [`silo-server`](https://github.com/Silo-Server/silo-server) and
-> [`silo-plugin-sdk`](https://github.com/Silo-Server/silo-plugin-sdk), including
-> the additive v0.13 provider operations. A Silo release containing the merged
-> plugin-provider host adapter is still required.
+## Current status
+
+`main` contains the `v0.3.0` manifest and targets
+[`silo-plugin-sdk` v0.13.0](https://github.com/Silo-Server/silo-plugin-sdk/releases/tag/v0.13.0).
+Plugin-backed watch providers landed in Silo Server through
+[Silo Server PR #475](https://github.com/Silo-Server/silo-server/pull/475).
+Until a Silo release includes that host adapter, this plugin requires a Silo
+build from current `main`.
+
+The latest published plugin release, `v0.1.1`, still uses the legacy
+event-consumer integration. Build this repository from `main` until a `v0.3.x`
+release is published.
+
+## Features
+
+- Exports anime movies and episodes when playback passes the configured watched
+  threshold.
+- Optionally exports items manually marked watched through a separate,
+  disabled-by-default setting.
+- Imports mapped AniList watch history into Silo.
+- Supports AniList OAuth authorization codes and manually issued access tokens.
+- Preserves completed entries and never lowers AniList progress.
+- Uses AniBridge, Anime-Lists, and ARM mapping sources without guessing by title.
+- Supports Linux amd64, Linux arm64, and Apple silicon macOS.
+
+## Setup
+
+1. Build the plugin from `main` using `make build`.
+2. Create an AniList OAuth application under
+   [AniList developer settings](https://anilist.co/settings/developer).
+3. Install the resulting `plugin` binary through Silo's plugin administration
+   flow.
+4. Enter the AniList client ID and client secret in the plugin settings.
+5. Set **Playback completion threshold** to the same watched percentage used by
+   Silo.
+6. Connect AniList from the desired Silo profile using OAuth or a manually
+   issued AniList access token.
+7. Enable **Sync manually marked watched items** only if manual marks should
+   advance AniList.
+
+### Provider settings
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| Client ID | Required | Numeric AniList OAuth application ID. |
+| Client secret | Required | AniList OAuth application secret; Silo stores it as a secret. |
+| Sync manually marked watched items | Off | Also export items marked watched without completed playback. |
+| Playback completion threshold | 90% | Percentage playback must exceed before AniList progress advances; valid range 1–99. |
 
 ## Architecture
 
