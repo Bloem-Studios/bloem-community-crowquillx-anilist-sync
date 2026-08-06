@@ -52,20 +52,27 @@ described below.
 
 ## Install and update through Silo
 
-Add this stable repository index URL to Silo:
+Add the shared crowquillx plugin catalog URL to Silo:
+
+```text
+https://raw.githubusercontent.com/crowquillx/silo-plugin-catalog/main/repository.json
+```
+
+The shared catalog contains AniList Sync and can add future crowquillx plugins
+without requiring another repository URL in Silo. Existing installations may
+keep using the legacy AniList-only URL:
 
 ```text
 https://github.com/crowquillx/silo-anilist-sync/releases/latest/download/repository.json
 ```
 
 Every `v*` tag builds all supported binaries, calculates their SHA-256
-checksums, embeds the release manifest in `repository.json`, and publishes all
-of them as GitHub release assets. Silo selects the binary for its platform and
-verifies the checksum before installation.
-
-Repository installations default to Silo's automatic update policy. Silo can
-therefore discover and install newer versions from the same stable index URL;
-operators may instead select the notification-only or manual policy in Silo.
+checksums, embeds the release manifest in the plugin's repository index, and
+publishes all assets. The shared catalog refreshes from that signed release
+boundary. Silo selects the binary for its platform and verifies its checksum
+before installation. Repository installations default to Silo's automatic
+update policy; operators may instead select notification-only or manual
+updates.
 
 ## Architecture
 
