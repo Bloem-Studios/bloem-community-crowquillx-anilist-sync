@@ -52,15 +52,27 @@ described below.
 
 ## Install and update through Silo
 
-Add the shared crowquillx plugin catalog URL to Silo:
+### Add the shared repository
 
-```text
-https://raw.githubusercontent.com/crowquillx/crowquillx-silo-plugins/main/repository.json
-```
+1. Sign in to Silo as an administrator.
+2. Open **Administration → Plugins** and select the **Catalog** tab.
+3. Under **Repositories**, select **Add**.
+4. Enter `Crowquillx plugins` as the repository name.
+5. Enter this URL:
 
-The shared catalog contains AniList Sync and can add future crowquillx plugins
-without requiring another repository URL in Silo. Existing installations may
-keep using the legacy AniList-only URL:
+   ```text
+   https://raw.githubusercontent.com/crowquillx/crowquillx-silo-plugins/main/repository.json
+   ```
+
+6. Select **Add**. **AniList Sync** will appear in the catalog.
+7. Select **Install** on the AniList Sync card.
+8. Return to the **Installed** tab and select **Configure** to enter the AniList
+   OAuth client ID, client secret, and playback completion threshold.
+9. Connect AniList from each Silo profile that should synchronize watch state.
+
+The shared catalog can add future crowquillx plugins without requiring another
+repository URL in Silo. Existing installations may keep using the legacy
+AniList-only URL:
 
 ```text
 https://github.com/crowquillx/silo-anilist-sync/releases/latest/download/repository.json
