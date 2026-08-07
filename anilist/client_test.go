@@ -3,9 +3,11 @@ package anilist
 import (
 	"context"
 	"encoding/json"
+
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestAdvanceProgressDoesNotDecrease(t *testing.T) {
@@ -147,5 +149,52 @@ func TestListEntriesPageReturnsStableMediaData(t *testing.T) {
 	entry := page.Entries[0]
 	if entry.MediaID != 42 || entry.Media.ID != 42 || entry.PreferredTitle() != "English" || entry.CompletedProgress() != 12 {
 		t.Fatalf("entry = %#v", entry)
+	}
+}
+
+func TestClientPacesRequestsFromRateLimitHeaders(t *testing.T) {
+	var lastRequest time.Time
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		now := time.Now()
+		if !lastRequest.IsZero() && now.Sub(lastRequest) < 75*time.Millisecond {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		lastRequest = now
+		w.Header().Set("X-RateLimit-Limit", "600")
+		w.Header().Set("X-RateLimit-Remaining", "599")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"Page": map[string]any{
+			"pageInfo":  map[string]any{"hasNextPage": false},
+			"mediaList": []any{},
+		}}})
+	}))
+	defer server.Close()
+
+	client := NewClient("token", server.Client())
+	client.Endpoint = server.URL
+	for page := 1; page <= 2; page++ {
+		if _, err := client.ListEntriesPage(context.Background(), 7, page, 25); err != nil {
+			t.Fatalf("ListEntriesPage(%d): %v", page, err)
+		}
+	}
+}
+
+func TestClientPreservesRateLimitRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	client := NewClient("token", server.Client())
+	client.Endpoint = server.URL
+	_, err := client.ListEntriesPage(context.Background(), 7, 1, 25)
+	apiErr, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("error = %T %v, want *Error", err, err)
+	}
+	if apiErr.Status != http.StatusTooManyRequests || apiErr.RetryAfter != time.Minute {
+		t.Fatalf("error = %#v, want HTTP 429 with 1m retry", apiErr)
 	}
 }

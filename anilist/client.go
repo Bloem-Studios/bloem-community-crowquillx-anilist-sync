@@ -8,15 +8,24 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
 
-const endpoint = "https://graphql.anilist.co"
+const (
+	endpoint                 = "https://graphql.anilist.co"
+	defaultRequestsPerMinute = 30
+	rateLimitWindow          = time.Minute
+	rateLimitPadding         = 100 * time.Millisecond
+)
+
+var sharedRateLimiter = newRateLimiter(defaultRequestsPerMinute)
 
 type Client struct {
 	HTTPClient  *http.Client
 	AccessToken string
 	Endpoint    string
+	limiter     *rateLimiter
 }
 
 type Error struct {
@@ -96,10 +105,136 @@ type ListPage struct {
 }
 
 func NewClient(token string, httpClient *http.Client) *Client {
+	limiter := &rateLimiter{}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
+		limiter = sharedRateLimiter
 	}
-	return &Client{HTTPClient: httpClient, AccessToken: token, Endpoint: endpoint}
+	return &Client{HTTPClient: httpClient, AccessToken: token, Endpoint: endpoint, limiter: limiter}
+}
+
+type rateLimiter struct {
+	mu       sync.Mutex
+	next     time.Time
+	interval time.Duration
+}
+
+func newRateLimiter(requestsPerMinute int) *rateLimiter {
+	return &rateLimiter{interval: rateLimitInterval(requestsPerMinute)}
+}
+
+func rateLimitInterval(requestsPerMinute int) time.Duration {
+	if requestsPerMinute < 1 {
+		return 0
+	}
+	interval := rateLimitWindow / time.Duration(requestsPerMinute)
+	return interval + max(rateLimitPadding, interval/20)
+}
+
+func (l *rateLimiter) wait(ctx context.Context) error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	now := time.Now()
+	ready := l.next
+	if ready.Before(now) {
+		ready = now
+	}
+	if l.interval > 0 {
+		l.next = ready.Add(l.interval)
+	}
+	l.mu.Unlock()
+
+	delay := time.Until(ready)
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (l *rateLimiter) observe(header http.Header, status int) time.Duration {
+	if l == nil {
+		return 0
+	}
+	now := time.Now()
+	interval := time.Duration(0)
+	if limit, ok := nonNegativeHeaderInt(header, "X-RateLimit-Limit"); ok && limit > 0 {
+		interval = rateLimitInterval(limit)
+	}
+	remaining, hasRemaining := nonNegativeHeaderInt(header, "X-RateLimit-Remaining")
+	resetAfter, hasReset := rateLimitResetAfter(header, now)
+	retryAfter := retryAfterDelay(header, now)
+	if status == http.StatusTooManyRequests {
+		if hasReset && resetAfter > retryAfter {
+			retryAfter = resetAfter
+		}
+		if retryAfter <= 0 {
+			retryAfter = rateLimitWindow
+		}
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if interval > 0 {
+		l.interval = interval
+	} else if status == http.StatusTooManyRequests && l.interval <= 0 {
+		l.interval = rateLimitInterval(defaultRequestsPerMinute)
+	}
+	if l.interval > 0 {
+		l.next = laterTime(l.next, now.Add(l.interval))
+	}
+	switch {
+	case status == http.StatusTooManyRequests:
+		l.next = laterTime(l.next, now.Add(retryAfter+rateLimitPadding))
+	case hasRemaining && remaining <= 1 && hasReset:
+		l.next = laterTime(l.next, now.Add(resetAfter+rateLimitPadding))
+	case hasRemaining && remaining == 0:
+		l.next = laterTime(l.next, now.Add(rateLimitWindow))
+	}
+	return retryAfter
+}
+
+func nonNegativeHeaderInt(header http.Header, name string) (int, bool) {
+	value, err := strconv.Atoi(header.Get(name))
+	return value, err == nil && value >= 0
+}
+
+func retryAfterDelay(header http.Header, now time.Time) time.Duration {
+	value := header.Get("Retry-After")
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if retryAt, err := http.ParseTime(value); err == nil && retryAt.After(now) {
+		return retryAt.Sub(now)
+	}
+	return 0
+}
+
+func rateLimitResetAfter(header http.Header, now time.Time) (time.Duration, bool) {
+	resetAt, err := strconv.ParseInt(header.Get("X-RateLimit-Reset"), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	delay := time.Unix(resetAt, 0).Sub(now)
+	if delay < 0 {
+		delay = 0
+	}
+	return delay, true
+}
+
+func laterTime(left, right time.Time) time.Time {
+	if right.After(left) {
+		return right
+	}
+	return left
 }
 
 func (c *Client) ListEntriesPage(ctx context.Context, userID, page, perPage int) (ListPage, error) {
@@ -193,16 +328,16 @@ func (c *Client) do(ctx context.Context, query string, variables map[string]any,
 	}
 	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
+	if err := c.limiter.wait(ctx); err != nil {
+		return fmt.Errorf("wait for AniList request allowance: %w", err)
+	}
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("call AniList: %w", err)
 	}
 	defer resp.Body.Close()
+	retryAfter := c.limiter.observe(resp.Header, resp.StatusCode)
 	if resp.StatusCode != http.StatusOK {
-		retryAfter := time.Duration(0)
-		if seconds, parseErr := strconv.Atoi(resp.Header.Get("Retry-After")); parseErr == nil && seconds > 0 {
-			retryAfter = time.Duration(seconds) * time.Second
-		}
 		return &Error{Status: resp.StatusCode, RetryAfter: retryAfter}
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
