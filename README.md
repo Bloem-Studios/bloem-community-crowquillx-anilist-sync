@@ -9,7 +9,7 @@ An AniList watch-sync provider for [Silo Server](https://github.com/Silo-Server/
 > watch-history import behavior are still being stabilized; do not rely on it as
 > the only copy of your watch state.
 
-`main` contains the `v0.3.0` manifest and targets
+`main` contains the `v0.3.1` manifest and targets
 [`silo-plugin-sdk` v0.13.0](https://github.com/Silo-Server/silo-plugin-sdk/releases/tag/v0.13.0).
 Plugin-backed watch providers landed in Silo Server through
 [Silo Server PR #475](https://github.com/Silo-Server/silo-server/pull/475).
