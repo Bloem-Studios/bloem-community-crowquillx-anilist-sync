@@ -32,14 +32,32 @@ described below.
 1. Add the repository URL below to Silo's plugin repositories.
 2. Install **AniList Sync** from Silo's plugin catalog.
 3. Create an AniList OAuth application under
-   [AniList developer settings](https://anilist.co/settings/developer).
+   [AniList developer settings](https://anilist.co/settings/developer). Set its
+   **Redirect URL** to:
+
+   ```text
+   https://anilist.co/api/v2/oauth/pin
+   ```
+
 4. Enter the AniList client ID and client secret in the plugin settings.
 5. Set **Playback completion threshold** to the same watched percentage used by
    Silo.
-6. Connect AniList from the desired Silo profile using OAuth or a manually
-   issued AniList access token.
-7. Enable **Sync manually marked watched items** only if manual marks should
+6. Generate an AniList access token by opening the following URL after replacing
+   `CLIENT_ID` with the application's numeric client ID:
+
+   ```text
+   https://anilist.co/api/v2/oauth/authorize?client_id=CLIENT_ID&response_type=token
+   ```
+
+7. Approve the application and copy the access token shown by AniList.
+8. In the desired Silo profile, open **Settings → Watch Providers**, select
+   **AniList**, and paste the access token into Silo's API-key field.
+9. Enable **Sync manually marked watched items** only if manual marks should
    advance AniList.
+
+Current Silo builds expose the plugin's manual access-token connection path.
+AniList calls this value an access token; Silo labels the corresponding field
+as an API key.
 
 ### Provider settings
 
@@ -68,7 +86,8 @@ described below.
 7. Select **Install** on the AniList Sync card.
 8. Return to the **Installed** tab and select **Configure** to enter the AniList
    OAuth client ID, client secret, and playback completion threshold.
-9. Connect AniList from each Silo profile that should synchronize watch state.
+9. Follow the access-token steps under [Setup](#setup) for each Silo profile
+   that should synchronize watch state.
 
 The shared catalog can add future crowquillx plugins without requiring another
 repository URL in Silo. Existing installations may keep using the legacy
