@@ -50,8 +50,9 @@ described below.
    ```
 
 7. Approve the application and copy the access token shown by AniList.
-8. In the desired Silo profile, open **Settings → Watch Providers**, select
-   **AniList**, and paste the access token into Silo's API-key field.
+8. In the desired Silo profile, open **Settings → Watch Providers**, find
+   **AniList**, and select **Connect**. Silo then opens a temporary
+   **Paste your AniList API key** prompt; paste the AniList access token there.
 9. Enable **Sync manually marked watched items** only if manual marks should
    advance AniList.
 
