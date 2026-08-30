@@ -181,13 +181,10 @@ func TestRemoteStatesExpandAniListProgressIntoMappedEpisodes(t *testing.T) {
 	entry.Media.Format = "TV"
 	entry.Media.Title.English = "Example Anime"
 	entry.Media.StartDate.Year = 2024
-	states, err := remoteStates([]anilist.ListEntry{entry}, mapping.Catalog{AniBridge: mapping.Dataset{
+	states := remoteStates([]anilist.ListEntry{entry}, mapping.Catalog{AniBridge: mapping.Dataset{
 		"tvdb_show:100:s2": {"anilist:42": {"1-12": "1-12"}},
 		"tmdb_show:200:s2": {"anilist:42": {"1-12": "1-12"}},
 	}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(states) != 2 {
 		t.Fatalf("states = %#v", states)
 	}

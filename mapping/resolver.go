@@ -32,9 +32,13 @@ type sourceCandidate struct {
 // Reverse resolves completed AniList progress back to stable catalog identities.
 // AniBridge is authoritative here: the title-only fallbacks used for export do
 // not carry enough episode identity to import history safely.
-func (d Dataset) Reverse(anilistID, progress int) ([]MediaSource, error) {
+//
+// Mapping rows that cannot be parsed (or carry a zero ratio, meaning they
+// never imply source progress) are skipped: the dataset is a daily-generated
+// third-party artifact, so one corrupt row must not fail the whole import.
+func (d Dataset) Reverse(anilistID, progress int) []MediaSource {
 	if anilistID < 1 || progress < 1 {
-		return nil, nil
+		return nil
 	}
 	targetDescriptor := "anilist:" + strconv.Itoa(anilistID)
 	var candidates []sourceCandidate
@@ -51,17 +55,13 @@ func (d Dataset) Reverse(anilistID, progress int) ([]MediaSource, error) {
 			candidates = append(candidates, source)
 			continue
 		}
-		episodes, err := completedSourceEpisodes(ranges, progress)
-		if err != nil {
-			return nil, fmt.Errorf("reverse map %s to %s: %w", targetDescriptor, descriptor, err)
-		}
-		for _, episode := range episodes {
+		for _, episode := range completedSourceEpisodes(ranges, progress) {
 			candidate := source
 			candidate.episode = episode
 			candidates = append(candidates, candidate)
 		}
 	}
-	return preferredMediaSources(candidates), nil
+	return preferredMediaSources(candidates)
 }
 
 func parseSourceCandidate(descriptor string) (sourceCandidate, bool) {
@@ -87,23 +87,23 @@ func parseSourceCandidate(descriptor string) (sourceCandidate, bool) {
 	return sourceCandidate{provider: provider, id: parts[1], season: season}, true
 }
 
-func completedSourceEpisodes(ranges map[string]string, progress int) ([]int, error) {
+func completedSourceEpisodes(ranges map[string]string, progress int) []int {
 	if len(ranges) == 0 {
 		episodes := make([]int, progress)
 		for index := range episodes {
 			episodes[index] = index + 1
 		}
-		return episodes, nil
+		return episodes
 	}
 	seen := make(map[int]struct{})
 	for sourceSpec, targetSpec := range ranges {
 		sourceStart, sourceEnd, err := parseRange(sourceSpec)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		targetStart, targetEnd, ratio, err := parseProjection(targetSpec)
-		if err != nil {
-			return nil, err
+		if err != nil || ratio == 0 {
+			continue
 		}
 		completedTargets := progress - targetStart + 1
 		if targetEnd > 0 {
@@ -131,9 +131,11 @@ func completedSourceEpisodes(ranges map[string]string, progress int) ([]int, err
 		episodes = append(episodes, episode)
 	}
 	sort.Ints(episodes)
-	return episodes, nil
+	return episodes
 }
 
+// parseProjection accepts a zero ratio: the dataset uses "range|0" to mark
+// source episodes that contribute no target progress.
 func parseProjection(spec string) (int, int, int, error) {
 	parts := strings.SplitN(spec, "|", 2)
 	if strings.Contains(parts[0], ",") {
@@ -146,7 +148,7 @@ func parseProjection(spec string) (int, int, int, error) {
 	ratio := 1
 	if len(parts) == 2 {
 		ratio, err = strconv.Atoi(parts[1])
-		if err != nil || ratio == 0 {
+		if err != nil {
 			return 0, 0, 0, fmt.Errorf("invalid target ratio %q", spec)
 		}
 	}
@@ -346,8 +348,11 @@ func projectEpisode(spec string, sourceOffset int) (int, bool, error) {
 	if len(parts) == 2 {
 		var err error
 		ratio, err = strconv.Atoi(parts[1])
-		if err != nil || ratio == 0 {
+		if err != nil {
 			return 0, false, fmt.Errorf("invalid target ratio %q", spec)
+		}
+		if ratio == 0 {
+			return 0, false, nil
 		}
 	}
 	if strings.Contains(parts[0], ",") {

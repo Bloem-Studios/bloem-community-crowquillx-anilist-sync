@@ -111,10 +111,7 @@ func (s *server) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncLis
 	if err != nil {
 		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFromError(err)}, nil
 	}
-	items, err := remoteStates(entries, dataset)
-	if err != nil {
-		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFromError(err)}, nil
-	}
+	items := remoteStates(entries, dataset)
 	if offset > len(items) {
 		return &pluginv1.WatchSyncListRemoteStateResponse{
 			Fault: invalidRequestFault(errors.New("remote state page token is out of range")),
@@ -183,17 +180,14 @@ func remotePageToken(token string) (int, int, error) {
 	return page, offset, nil
 }
 
-func remoteStates(entries []anilist.ListEntry, dataset mapping.Catalog) ([]*pluginv1.WatchSyncRemoteState, error) {
+func remoteStates(entries []anilist.ListEntry, dataset mapping.Catalog) []*pluginv1.WatchSyncRemoteState {
 	var states []*pluginv1.WatchSyncRemoteState
 	for _, entry := range entries {
 		progress := entry.CompletedProgress()
 		if progress < 1 || entry.Media.ID < 1 || entry.ID < 1 {
 			continue
 		}
-		sources, err := dataset.AniBridge.Reverse(entry.Media.ID, progress)
-		if err != nil {
-			return nil, err
-		}
+		sources := dataset.AniBridge.Reverse(entry.Media.ID, progress)
 		expectMovie := entry.Media.Format == "MOVIE"
 		hasExpectedSource := false
 		for _, source := range sources {
@@ -233,7 +227,7 @@ func remoteStates(entries []anilist.ListEntry, dataset mapping.Catalog) ([]*plug
 			})
 		}
 	}
-	return states, nil
+	return states
 }
 
 func (s *server) ApplyEvents(ctx context.Context, req *pluginv1.WatchSyncApplyEventsRequest) (*pluginv1.WatchSyncApplyEventsResponse, error) {

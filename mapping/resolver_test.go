@@ -60,6 +60,16 @@ func TestRejectsNonContiguousTarget(t *testing.T) {
 	}
 }
 
+func TestZeroRatioTargetMapsToNothing(t *testing.T) {
+	got, ok, err := mapEpisode(map[string]string{"1-19": "1-19|0"}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatalf("zero-ratio row should map to no target, got %d", got)
+	}
+}
+
 func TestMovieDescriptor(t *testing.T) {
 	for _, provider := range []string{"tmdb", "tvdb"} {
 		dataset := Dataset{provider + "_movie:1": {"anilist:2": {}}}
@@ -75,10 +85,7 @@ func TestReversePrefersCompleteTVDBSeriesAndMergesMatchingIDs(t *testing.T) {
 		"tvdb_show:100:s2": {"anilist:42": {"1-12": "1-12"}},
 		"tmdb_show:200:s2": {"anilist:42": {"1-12": "1-12"}},
 	}
-	sources, err := dataset.Reverse(42, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sources := dataset.Reverse(42, 2)
 	if len(sources) != 2 {
 		t.Fatalf("sources = %#v", sources)
 	}
@@ -93,24 +100,15 @@ func TestReverseRatiosRepresentCompletedSourceEpisodes(t *testing.T) {
 		"tvdb_show:100:s1": {"anilist:42": {"1-4": "1-2|2"}},
 		"tvdb_show:200:s1": {"anilist:43": {"1-2": "1-6|-3"}},
 	}
-	manySources, err := dataset.Reverse(42, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	manySources := dataset.Reverse(42, 1)
 	if len(manySources) != 2 || manySources[1].Episode != 2 {
 		t.Fatalf("two-source projection = %#v", manySources)
 	}
-	manyTargets, err := dataset.Reverse(43, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	manyTargets := dataset.Reverse(43, 2)
 	if len(manyTargets) != 0 {
 		t.Fatalf("partial target group should not complete a source episode: %#v", manyTargets)
 	}
-	manyTargets, err = dataset.Reverse(43, 3)
-	if err != nil {
-		t.Fatal(err)
-	}
+	manyTargets = dataset.Reverse(43, 3)
 	if len(manyTargets) != 1 || manyTargets[0].Episode != 1 {
 		t.Fatalf("completed target group = %#v", manyTargets)
 	}
@@ -121,12 +119,40 @@ func TestReversePrefersTMDBMovieIdentity(t *testing.T) {
 		"tvdb_movie:100": {"anilist:42": {}},
 		"tmdb_movie:200": {"anilist:42": {}},
 	}
-	sources, err := dataset.Reverse(42, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sources := dataset.Reverse(42, 1)
 	if len(sources) != 1 || !sources[0].Movie ||
 		sources[0].ExternalIDs["tmdb"] != "200" || sources[0].ExternalIDs["tvdb"] != "100" {
 		t.Fatalf("sources = %#v", sources)
+	}
+}
+
+// Regression: the upstream AniBridge dataset ships rows like
+// tvdb_show:305089:s1 -> anilist:189046 {"1-19": "1-19|0"} (Re:Zero S4).
+// A zero-ratio row implies no source progress, and an unreadable row must
+// never fail the whole watched import.
+func TestReverseIgnoresZeroRatioAndUnreadableRows(t *testing.T) {
+	dataset := Dataset{
+		"tvdb_show:305089:s1": {"anilist:189046": {"1-19": "1-19|0"}},
+		"tvdb_show:305089:s4": {"anilist:189046": {"1-19": "1-19"}},
+		"tmdb_show:65942:s1":  {"anilist:189046": {"67-85": "1-19"}},
+	}
+	sources := dataset.Reverse(189046, 3)
+	if len(sources) != 3 || sources[0].Season != 4 || sources[0].Episode != 1 || sources[2].Episode != 3 {
+		t.Fatalf("sources = %#v", sources)
+	}
+
+	only := Dataset{"tvdb_show:305089:s1": {"anilist:189046": {"1-19": "1-19|0"}}}
+	if got := only.Reverse(189046, 19); len(got) != 0 {
+		t.Fatalf("zero-ratio-only dataset should yield no sources, got %#v", got)
+	}
+
+	corrupt := Dataset{
+		"tvdb_show:1:s1": {"anilist:42": {"1-4": "not-a-range"}},
+		"tvdb_show:2:s1": {"anilist:42": {"garbage": "1-4"}},
+		"tmdb_show:3:s1": {"anilist:42": {"1-4": "1-4"}},
+	}
+	sources = corrupt.Reverse(42, 2)
+	if len(sources) != 2 || sources[1].ExternalIDs["tmdb"] != "3" {
+		t.Fatalf("unreadable rows should be skipped, got %#v", sources)
 	}
 }
