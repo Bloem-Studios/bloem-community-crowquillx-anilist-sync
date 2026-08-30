@@ -461,12 +461,40 @@ func faultFromError(err error) *pluginv1.WatchSyncFault {
 		fault.SafeMessage = "AniList rate limit reached"
 		fault.RetryAfter = durationpb.New(apiErr.RetryAfter)
 	default:
-		if apiErr.Status >= 400 && apiErr.Status < 500 {
+		detail := faultDetail(apiErr)
+		if apiErr.Status == http.StatusOK && strings.Contains(strings.ToLower(apiErr.Message), "too many requests") {
+			fault.Code = pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_RATE_LIMITED
+			fault.SafeMessage = "AniList rate limit reached"
+			retryAfter := apiErr.RetryAfter
+			if retryAfter == 0 {
+				retryAfter = 60 * time.Second
+			}
+			fault.RetryAfter = durationpb.New(retryAfter)
+		} else if apiErr.Status >= 400 && apiErr.Status < 500 {
 			fault.Code = pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_PERMANENT
-			fault.SafeMessage = "AniList rejected the request"
+			fault.SafeMessage = "AniList rejected the request" + detail
+		} else {
+			fault.SafeMessage = "temporary AniList request failure" + detail
 		}
 	}
 	return fault
+}
+
+// faultDetail renders the distinguishing parts of an anilist.Error so the
+// fault shown in Silo's UI carries the status and message that diagnosis
+// needs. The message alone stays generic for non-anilist errors.
+func faultDetail(apiErr *anilist.Error) string {
+	var parts []string
+	if apiErr.Status > 0 && apiErr.Status != http.StatusOK {
+		parts = append(parts, fmt.Sprintf("HTTP %d", apiErr.Status))
+	}
+	if apiErr.Message != "" {
+		parts = append(parts, apiErr.Message)
+	}
+	if len(parts) > 0 {
+		return " (" + strings.Join(parts, "; ") + ")"
+	}
+	return ""
 }
 
 func main() {

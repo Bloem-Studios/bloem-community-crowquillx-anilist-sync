@@ -315,3 +315,67 @@ func TestIgnoredManualEventsDoNotLoadMappings(t *testing.T) {
 		t.Fatalf("response = %#v", response)
 	}
 }
+
+func TestFaultFromError(t *testing.T) {
+	longPending := 90 * time.Second
+	tests := []struct {
+		name        string
+		err         error
+		wantCode    pluginv1.WatchSyncFaultCode
+		wantMessage string
+		wantRetry   time.Duration
+	}{
+		{
+			name:        "graphql too many requests is rate limited",
+			err:         &anilist.Error{Status: http.StatusOK, Message: "AniList GraphQL: Too Many Requests"},
+			wantCode:    pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_RATE_LIMITED,
+			wantMessage: "AniList rate limit reached",
+			wantRetry:   60 * time.Second,
+		},
+		{
+			name:        "graphql too many requests keeps retry after",
+			err:         &anilist.Error{Status: http.StatusOK, Message: "AniList GraphQL: Too Many Requests", RetryAfter: longPending},
+			wantCode:    pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_RATE_LIMITED,
+			wantMessage: "AniList rate limit reached",
+			wantRetry:   longPending,
+		},
+		{
+			name:        "http 500 is temporary with detail",
+			err:         &anilist.Error{Status: http.StatusInternalServerError},
+			wantCode:    pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY,
+			wantMessage: "temporary AniList request failure (HTTP 500)",
+		},
+		{
+			name:        "graphql validation failure is temporary with detail",
+			err:         &anilist.Error{Status: http.StatusOK, Message: "AniList GraphQL: Validation Failed (f.name)."},
+			wantCode:    pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY,
+			wantMessage: "temporary AniList request failure (AniList GraphQL: Validation Failed (f.name).)",
+		},
+		{
+			name:        "http 404 is permanent with detail",
+			err:         &anilist.Error{Status: http.StatusNotFound},
+			wantCode:    pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_PERMANENT,
+			wantMessage: "AniList rejected the request (HTTP 404)",
+		},
+		{
+			name:        "non anilist error keeps generic temporary message",
+			err:         errors.New("network partition"),
+			wantCode:    pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY,
+			wantMessage: "temporary AniList request failure",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fault := faultFromError(tt.err)
+			if fault.GetCode() != tt.wantCode {
+				t.Fatalf("code = %v, want %v", fault.GetCode(), tt.wantCode)
+			}
+			if fault.GetSafeMessage() != tt.wantMessage {
+				t.Fatalf("safe_message = %q, want %q", fault.GetSafeMessage(), tt.wantMessage)
+			}
+			if got := fault.GetRetryAfter().AsDuration(); got != tt.wantRetry {
+				t.Fatalf("retry_after = %v, want %v", got, tt.wantRetry)
+			}
+		})
+	}
+}

@@ -5,11 +5,11 @@ An AniList watch-sync provider for [Silo Server](https://github.com/Silo-Server/
 ## Current status
 
 > [!WARNING]
-> This plugin is unfinished and is not ready for daily use. Authentication and
-> watch-history import behavior are still being stabilized; do not rely on it as
-> the only copy of your watch state.
+> Watch-history import is new and still stabilizing. Do not rely on it as the
+> only copy of your watch state. The device activation flow shipped in v0.5.0
+> and is live in production.
 
-`main` contains the `v0.5.0` manifest and targets
+`main` contains the `v0.5.1` manifest and targets
 [`silo-plugin-sdk` v0.13.0](https://github.com/Silo-Server/silo-plugin-sdk/releases/tag/v0.13.0).
 Plugin-backed watch providers landed in Silo Server through
 [Silo Server PR #475](https://github.com/Silo-Server/silo-server/pull/475).
@@ -17,7 +17,7 @@ Until a Silo release includes that host adapter, this plugin requires a Silo
 build from current `main`.
 
 The `v0.1.x` release line uses the legacy event-consumer integration. Use
-`v0.3.x` or a build from `main` for the host-owned watch-provider integration
+`v0.5.x` or a build from `main` for the host-owned watch-provider integration
 described below.
 
 ## Features
@@ -27,8 +27,9 @@ described below.
 - Optionally exports items manually marked watched through a separate,
   disabled-by-default setting.
 - Imports mapped AniList watch history into Silo.
-- Connects profiles through a device activation flow; the token never leaves
-  the encrypted bridge envelope and Silo's UI end to end.
+- Connects profiles through a device activation flow. The browser encrypts
+  the token to a key derived from the activation code, and the bridge never
+  sees it.
 - Preserves completed entries and never lowers AniList progress.
 - Uses AniBridge, Anime-Lists, and ARM mapping sources without guessing by title.
 - Supports Linux amd64, Linux arm64, and Apple silicon macOS.
@@ -41,9 +42,10 @@ described below.
    Silo.
 4. In the desired Silo profile, open **Settings → Watch Providers**, find
    **AniList**, and select **Connect**. Silo shows a code and a button that
-   opens the activation page. Enter the code, approve access on AniList, and
-   return to Silo — the connection completes automatically and shows your
-   account.
+   opens the activation page at https://anilist.crowquill.dev. Recent Silo
+   builds embed the code in the link, so you may not be asked to type it. If
+   the page asks for the code, enter it. Approve access on AniList and return
+   to Silo. The connection completes on its own and shows your account.
 
 Enable **Sync manually marked watched items** only if manual marks should
 advance AniList.
@@ -60,7 +62,7 @@ you can still connect by pasting a token:
    https://anilist.co/api/v2/oauth/authorize?client_id=49797&response_type=token
    ```
 
-   The client ID belongs to the bundled **Silo AniList Sync** AniList
+   The client ID belongs to the bundled Silo AniList Sync AniList
    application; advanced users may substitute their own application's client
    ID, whose redirect URL must be set to
    `https://anilist.co/api/v2/oauth/pin`.
@@ -93,7 +95,7 @@ The token AniList calls an access token is what Silo's connect prompt accepts.
    https://raw.githubusercontent.com/crowquillx/crowquillx-silo-plugins/main/repository.json
    ```
 
-6. Select **Add**. **AniList Sync** will appear in the catalog.
+6. Select **Add**. AniList Sync appears in the catalog.
 7. Select **Install** on the AniList Sync card.
 8. Return to the **Installed** tab and select **Configure** to set the
    playback completion threshold.
@@ -207,7 +209,7 @@ nix shell nixpkgs#go --command fish -c 'CGO_ENABLED=0 go test ./...'
 Set the target version in `manifest.json`, then push the matching `vX.Y.Z` tag.
 The release workflow validates that the tag and manifest agree, cross-compiles
 every supported platform, publishes checksums and binaries, and generates the
-`repository.json` consumed by Silo. The regular CI workflow performs the same
+`repository.json` that Silo consumes. The regular CI workflow performs the same
 cross-build and index-generation checks on pull requests and `main`.
 
 ## Privacy and upstream services
@@ -215,14 +217,16 @@ cross-build and index-generation checks on pull requests and `main`.
 The plugin sends AniList media IDs and absolute progress to AniList and reads
 the connected account's anime-list progress for watched imports. It retrieves
 the public AniBridge and Anime-Lists mapping artifacts from GitHub; fallback
-resolution sends AniDB IDs to the public ARM service. No AniList credentials or
-Silo user information are sent to mapping services. Silo passes decrypted
-credentials only over the local plugin gRPC channel for calls that need them.
+resolution sends AniDB IDs to the public ARM service. The plugin sends
+no AniList credentials or Silo user information to mapping services. Silo
+passes decrypted credentials only over the local plugin gRPC channel for
+calls that need them.
 
-The connect bridge receives only a SHA-256 hash of the user code and an
-AES-256-GCM ciphertext. The browser encrypts the AniList token to a key derived
-from the code before it is sent, so the bridge cannot read it; the bridge
-stores only the encrypted envelope for the 15-minute connection window.
+The [connect bridge](https://github.com/crowquillx/anilist-connect-bridge)
+receives only a SHA-256 hash of the user code and an AES-256-GCM ciphertext.
+The browser encrypts the AniList token to a key derived from the code before
+it is sent, so the bridge cannot read it; the bridge stores only the
+encrypted envelope for the 15-minute connection window.
 
 ## Attribution
 
