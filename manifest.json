@@ -1,6 +1,6 @@
 {
   "plugin_id": "dev.crowquillx.anilist-sync",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
   "supported_platforms": [
@@ -25,7 +25,7 @@
       "description": "Syncs completed playback and optionally manual watched marks to AniList, and imports mapped watch history.",
       "watch_sync_provider": {
         "auth_methods": [
-          "WATCH_SYNC_AUTH_METHOD_API_KEY"
+          "WATCH_SYNC_AUTH_METHOD_DEVICE_CODE"
         ],
         "export_watched": true,
         "export_unwatched": false,
@@ -86,7 +86,7 @@
     "display_name": "AniList Sync",
     "summary": "Reliably synchronize completed anime with AniList through Silo's watch-provider pipeline.",
     "description_markdown": "Uses Silo's host-owned watch-sync pipeline for encrypted per-profile credentials, durable playback completion delivery, optional manual watched marks, retries, imports, and rich episode identity. Episode exports prefer the daily AniBridge v3 dataset, with an Anime-Lists and ARM fallback. Watch-history imports reverse-map AniList progress through AniBridge. AniList progress is monotonic and ambiguous mappings are rejected rather than guessed.",
-    "setup_markdown": "Install the plugin and match the playback completion threshold to Silo's watched threshold. To connect a profile, open https://anilist.co/api/v2/oauth/authorize?client_id=49797&response_type=token, approve access, copy the access token AniList shows, then open Settings → Watch Providers → AniList, select Connect, and paste the token. Silo validates the token against AniList and shows the connected account. Tokens last about one year; reconnect when AniList reports the credential as expired.",
+    "setup_markdown": "Install the plugin and match the playback completion threshold to Silo's watched threshold. To connect a profile, open Settings → Watch Providers → AniList and select Connect. Silo shows a code and a button that opens the activation page; enter the code, approve access on AniList, and return to Silo — the connection completes automatically and shows your account. AniList tokens last about one year; reconnect when the credential expires. A manual paste flow remains documented in the plugin README as a fallback.",
     "homepage_url": "https://github.com/crowquillx/silo-anilist-sync",
     "source_url": "https://github.com/crowquillx/silo-anilist-sync",
     "support_url": "https://github.com/crowquillx/silo-anilist-sync/issues",

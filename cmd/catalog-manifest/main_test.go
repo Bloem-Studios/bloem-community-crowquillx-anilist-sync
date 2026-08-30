@@ -21,7 +21,7 @@ func TestEncodeCatalogManifestRoundTripsThroughSiloJSONContract(t *testing.T) {
 		t.Fatalf("manifest identity = %q@%q checksum %q", manifest.GetPluginId(), manifest.GetVersion(), manifest.GetChecksum())
 	}
 	descriptor := manifest.GetCapabilities()[0].GetWatchSyncProvider()
-	if len(descriptor.GetAuthMethods()) != 1 || descriptor.GetAuthMethods()[0] != pluginv1.WatchSyncAuthMethod_WATCH_SYNC_AUTH_METHOD_API_KEY {
+	if len(descriptor.GetAuthMethods()) != 1 || descriptor.GetAuthMethods()[0] != pluginv1.WatchSyncAuthMethod_WATCH_SYNC_AUTH_METHOD_DEVICE_CODE {
 		t.Fatalf("auth methods = %v", descriptor.GetAuthMethods())
 	}
 	fields := manifest.GetGlobalConfigSchema()[0].GetAdminForm().GetFields()

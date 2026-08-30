@@ -9,7 +9,7 @@ An AniList watch-sync provider for [Silo Server](https://github.com/Silo-Server/
 > watch-history import behavior are still being stabilized; do not rely on it as
 > the only copy of your watch state.
 
-`main` contains the `v0.4.0` manifest and targets
+`main` contains the `v0.5.0` manifest and targets
 [`silo-plugin-sdk` v0.13.0](https://github.com/Silo-Server/silo-plugin-sdk/releases/tag/v0.13.0).
 Plugin-backed watch providers landed in Silo Server through
 [Silo Server PR #475](https://github.com/Silo-Server/silo-server/pull/475).
@@ -27,8 +27,8 @@ described below.
 - Optionally exports items manually marked watched through a separate,
   disabled-by-default setting.
 - Imports mapped AniList watch history into Silo.
-- Connects profiles with a validated AniList access token; expiry is read
-  from the token so Silo can warn before reconnection is needed.
+- Connects profiles through a device activation flow; the token never leaves
+  the encrypted bridge envelope and Silo's UI end to end.
 - Preserves completed entries and never lowers AniList progress.
 - Uses AniBridge, Anime-Lists, and ARM mapping sources without guessing by title.
 - Supports Linux amd64, Linux arm64, and Apple silicon macOS.
@@ -39,7 +39,22 @@ described below.
 2. Install **AniList Sync** from Silo's plugin catalog.
 3. Set **Playback completion threshold** to the same watched percentage used by
    Silo.
-4. Open the AniList authorize URL:
+4. In the desired Silo profile, open **Settings → Watch Providers**, find
+   **AniList**, and select **Connect**. Silo shows a code and a button that
+   opens the activation page. Enter the code, approve access on AniList, and
+   return to Silo — the connection completes automatically and shows your
+   account.
+
+Enable **Sync manually marked watched items** only if manual marks should
+advance AniList.
+
+### Fallback: manual token
+
+The device flow is the default. If the connect bridge is unavailable and the
+plugin is rebuilt with the `API_KEY` auth method restored in `manifest.json`,
+you can still connect by pasting a token:
+
+1. Open the AniList authorize URL:
 
    ```text
    https://anilist.co/api/v2/oauth/authorize?client_id=49797&response_type=token
@@ -49,12 +64,11 @@ described below.
    application; advanced users may substitute their own application's client
    ID, whose redirect URL must be set to
    `https://anilist.co/api/v2/oauth/pin`.
-5. Approve the application and copy the access token shown by AniList.
-6. In the desired Silo profile, open **Settings → Watch Providers**, find
+
+2. Approve the application and copy the access token shown by AniList.
+3. In the desired Silo profile, open **Settings → Watch Providers**, find
    **AniList**, and select **Connect**, then paste the token. Silo validates
    the token immediately and shows the connected account.
-7. Enable **Sync manually marked watched items** only if manual marks should
-   advance AniList.
 
 The token AniList calls an access token is what Silo's connect prompt accepts.
 
@@ -83,8 +97,8 @@ The token AniList calls an access token is what Silo's connect prompt accepts.
 7. Select **Install** on the AniList Sync card.
 8. Return to the **Installed** tab and select **Configure** to set the
    playback completion threshold.
-9. Follow the access-token steps under [Setup](#setup) for each Silo profile
-   that should synchronize watch state.
+9. Follow the connect steps under [Setup](#setup) for each Silo profile that
+   should synchronize watch state.
 
 The shared catalog can add future crowquillx plugins without requiring another
 repository URL in Silo. Existing installations may keep using the legacy
@@ -113,19 +127,22 @@ Silo owns:
 
 The plugin remains a stateless provider adapter. It:
 
-1. Validates credentials with AniList's `Viewer` query.
-2. Imports AniList watch history by expanding list progress into completed
+1. Runs the device authorization flow, adapting AniList's implicit grant
+   through the connect bridge; the bridge stores only encrypted envelopes and
+   the plugin decrypts the token with a key derived from the user code.
+2. Validates credentials with AniList's `Viewer` query.
+3. Imports AniList watch history by expanding list progress into completed
    movies and episodes and reverse-mapping them through AniBridge.
-3. Maps Silo TVDB/TMDB/IMDb movie and episode identity through the daily
+4. Maps Silo TVDB/TMDB/IMDb movie and episode identity through the daily
    [AniBridge v3 mappings](https://github.com/anibridge/anibridge-mappings),
    falling back through [Anime-Lists](https://github.com/Anime-Lists/anime-lists)
    and the [ARM mapping service](https://github.com/BeeeQueue/arm-server) when
    AniBridge has no direct export mapping.
-4. Advances AniList on completed playback stop events. Manual watched marks use
+5. Advances AniList on completed playback stop events. Manual watched marks use
    the same convergent update only when their separate plugin toggle is enabled.
-5. Reads the existing AniList list entry and applies absolute, monotonic
+6. Reads the existing AniList list entry and applies absolute, monotonic
    progress through `SaveMediaListEntry`.
-6. Returns typed applied, no-change, rejected, retry, rate-limit, and credential
+7. Returns typed applied, no-change, rejected, retry, rate-limit, and credential
    outcomes to Silo's durable worker.
 
 Credentials and OAuth flow data are transient RPC inputs. The plugin does not
@@ -201,6 +218,11 @@ the public AniBridge and Anime-Lists mapping artifacts from GitHub; fallback
 resolution sends AniDB IDs to the public ARM service. No AniList credentials or
 Silo user information are sent to mapping services. Silo passes decrypted
 credentials only over the local plugin gRPC channel for calls that need them.
+
+The connect bridge receives only a SHA-256 hash of the user code and an
+AES-256-GCM ciphertext. The browser encrypts the AniList token to a key derived
+from the code before it is sent, so the bridge cannot read it; the bridge
+stores only the encrypted envelope for the 15-minute connection window.
 
 ## Attribution
 

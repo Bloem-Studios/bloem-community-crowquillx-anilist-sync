@@ -19,6 +19,7 @@ import (
 	sdkruntime "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/runtime"
 	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/runtimedefault"
 	"github.com/crowquillx/silo-anilist-sync/anilist"
+	"github.com/crowquillx/silo-anilist-sync/device"
 	"github.com/crowquillx/silo-anilist-sync/mapping"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -474,10 +475,14 @@ func main() {
 		panic(err)
 	}
 	srv := &server{manifest: manifest, mappings: mapping.NewClient(nil)}
-	sdkruntime.Serve(sdkruntime.ServeConfig{Servers: sdkruntime.CapabilityServers{
+	servers := sdkruntime.CapabilityServers{
 		Runtime:           srv,
 		WatchSyncProvider: srv,
-	}})
+	}
+	sdkruntime.Serve(sdkruntime.ServeConfig{
+		Servers: servers,
+		Plugins: sdkruntime.DefaultPluginSetWithWatchSyncDeviceAuthorization(servers, device.NewService()),
+	})
 }
 
 func loadManifest() (*pluginv1.PluginManifest, error) {

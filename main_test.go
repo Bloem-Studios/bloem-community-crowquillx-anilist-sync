@@ -127,7 +127,7 @@ func TestMappingServiceFailureRetries(t *testing.T) {
 	}
 }
 
-func TestManifestAdvertisesWatchedImportAndApiKeyConfiguration(t *testing.T) {
+func TestManifestAdvertisesWatchedImportAndDeviceCodeConfiguration(t *testing.T) {
 	manifest, err := publicmanifest.Load(manifestJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestManifestAdvertisesWatchedImportAndApiKeyConfiguration(t *testing.T) {
 		t.Fatalf("watch sync descriptor = %#v", descriptor)
 	}
 	authMethods := descriptor.GetAuthMethods()
-	if len(authMethods) != 1 || authMethods[0] != pluginv1.WatchSyncAuthMethod_WATCH_SYNC_AUTH_METHOD_API_KEY {
+	if len(authMethods) != 1 || authMethods[0] != pluginv1.WatchSyncAuthMethod_WATCH_SYNC_AUTH_METHOD_DEVICE_CODE {
 		t.Fatalf("auth methods = %#v", authMethods)
 	}
 	if len(manifest.GetGlobalConfigSchema()) != 1 {
