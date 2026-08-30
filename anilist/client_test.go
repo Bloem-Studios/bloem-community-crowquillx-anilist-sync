@@ -6,6 +6,7 @@ import (
 
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -108,7 +109,7 @@ func TestAdvanceProgressRejectsMappingPastKnownTotal(t *testing.T) {
 	}
 }
 
-func TestListEntriesPageReturnsStableMediaData(t *testing.T) {
+func TestListEntriesFlattensListsAndDeduplicatesEntries(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Query     string         `json:"query"`
@@ -117,38 +118,59 @@ func TestListEntriesPageReturnsStableMediaData(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Variables["userId"] != float64(7) || body.Variables["page"] != float64(2) ||
-			body.Variables["perPage"] != float64(25) {
+		if body.Variables["userId"] != float64(7) {
 			t.Fatalf("variables = %#v", body.Variables)
 		}
 		if body.Query == "" {
 			t.Fatal("query is empty")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"Page": map[string]any{
-			"pageInfo": map[string]any{"hasNextPage": true},
-			"mediaList": []map[string]any{{
-				"id": 9, "mediaId": 42, "status": "COMPLETED", "progress": 0,
-				"media": map[string]any{
-					"id": 42, "format": "TV", "episodes": 12,
-					"title":     map[string]any{"romaji": "Romaji", "english": "English"},
-					"startDate": map[string]any{"year": 2024},
-				},
-			}},
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"MediaListCollection": map[string]any{
+			"lists": []map[string]any{
+				{"entries": []map[string]any{{
+					"id": 9, "mediaId": 42, "status": "COMPLETED", "progress": 0,
+					"media": map[string]any{
+						"id": 42, "format": "TV", "episodes": 12,
+						"title":     map[string]any{"romaji": "Romaji", "english": "English"},
+						"startDate": map[string]any{"year": 2024},
+					},
+				}}},
+				{"entries": []map[string]any{
+					{
+						"id": 10, "mediaId": 7, "status": "CURRENT", "progress": 3,
+						"media": map[string]any{
+							"id": 7, "format": "TV", "episodes": 24,
+							"title":     map[string]any{"romaji": "Early"},
+							"startDate": map[string]any{"year": 2023},
+						},
+					},
+					{
+						"id": 9, "mediaId": 42, "status": "COMPLETED", "progress": 0,
+						"media": map[string]any{
+							"id": 42, "format": "TV", "episodes": 12,
+							"title":     map[string]any{"romaji": "Romaji", "english": "English"},
+							"startDate": map[string]any{"year": 2024},
+						},
+					},
+				}},
+			},
 		}}})
 	}))
 	defer server.Close()
 	client := NewClient("token", server.Client())
 	client.Endpoint = server.URL
-	page, err := client.ListEntriesPage(context.Background(), 7, 2, 25)
+	entries, err := client.ListEntries(context.Background(), 7)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !page.HasNextPage || len(page.Entries) != 1 {
-		t.Fatalf("page = %#v", page)
+	if len(entries) != 2 {
+		t.Fatalf("entries = %#v, want 2 after deduplicating entry 9", entries)
 	}
-	entry := page.Entries[0]
-	if entry.MediaID != 42 || entry.Media.ID != 42 || entry.PreferredTitle() != "English" || entry.CompletedProgress() != 12 {
-		t.Fatalf("entry = %#v", entry)
+	if entries[0].MediaID != 7 || entries[0].ID != 10 {
+		t.Fatalf("entries[0] = %#v, want mediaId 7 entry 10 first", entries[0])
+	}
+	entry := entries[1]
+	if entry.MediaID != 42 || entry.ID != 9 || entry.Media.ID != 42 || entry.PreferredTitle() != "English" || entry.CompletedProgress() != 12 {
+		t.Fatalf("entries[1] = %#v", entry)
 	}
 }
 
@@ -164,18 +186,17 @@ func TestClientPacesRequestsFromRateLimitHeaders(t *testing.T) {
 		lastRequest = now
 		w.Header().Set("X-RateLimit-Limit", "600")
 		w.Header().Set("X-RateLimit-Remaining", "599")
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"Page": map[string]any{
-			"pageInfo":  map[string]any{"hasNextPage": false},
-			"mediaList": []any{},
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"MediaListCollection": map[string]any{
+			"lists": []any{},
 		}}})
 	}))
 	defer server.Close()
 
 	client := NewClient("token", server.Client())
 	client.Endpoint = server.URL
-	for page := 1; page <= 2; page++ {
-		if _, err := client.ListEntriesPage(context.Background(), 7, page, 25); err != nil {
-			t.Fatalf("ListEntriesPage(%d): %v", page, err)
+	for request := 1; request <= 2; request++ {
+		if _, err := client.ListEntries(context.Background(), 7); err != nil {
+			t.Fatalf("ListEntries(%d): %v", request, err)
 		}
 	}
 }
@@ -189,12 +210,37 @@ func TestClientPreservesRateLimitRetryAfter(t *testing.T) {
 
 	client := NewClient("token", server.Client())
 	client.Endpoint = server.URL
-	_, err := client.ListEntriesPage(context.Background(), 7, 1, 25)
+	_, err := client.ListEntries(context.Background(), 7)
 	apiErr, ok := err.(*Error)
 	if !ok {
 		t.Fatalf("error = %T %v, want *Error", err, err)
 	}
 	if apiErr.Status != http.StatusTooManyRequests || apiErr.RetryAfter != time.Minute {
 		t.Fatalf("error = %#v, want HTTP 429 with 1m retry", apiErr)
+	}
+}
+
+func TestLimiterStretchesIntervalAcrossRemainingBudget(t *testing.T) {
+	limiter := newRateLimiter(defaultRequestsPerMinute)
+	resetAt := time.Now().Add(120 * time.Second)
+	header := http.Header{}
+	header.Set("X-RateLimit-Limit", "30")
+	header.Set("X-RateLimit-Remaining", "2")
+	header.Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
+	limiter.observe(header, http.StatusOK)
+
+	limiter.mu.Lock()
+	next := limiter.next
+	interval := limiter.interval
+	limiter.mu.Unlock()
+
+	// The window has ~120s left and 2 requests of budget, so the limiter must
+	// space them ~60s apart instead of the 2s derived from the 30/min limit.
+	delay := time.Until(next)
+	if delay < 55*time.Second || delay > 65*time.Second {
+		t.Fatalf("delay = %v, want roughly 60s (120s reset horizon / 2 remaining)", delay)
+	}
+	if interval < 55*time.Second || interval > 65*time.Second {
+		t.Fatalf("interval = %v, want roughly 60s", interval)
 	}
 }

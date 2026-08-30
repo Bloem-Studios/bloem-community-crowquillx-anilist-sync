@@ -9,7 +9,7 @@ An AniList watch-sync provider for [Silo Server](https://github.com/Silo-Server/
 > only copy of your watch state. The device activation flow shipped in v0.5.0
 > and is live in production.
 
-`main` contains the `v0.5.1` manifest and targets
+`main` contains the `v0.5.2` manifest and targets
 [`silo-plugin-sdk` v0.13.0](https://github.com/Silo-Server/silo-plugin-sdk/releases/tag/v0.13.0).
 Plugin-backed watch providers landed in Silo Server through
 [Silo Server PR #475](https://github.com/Silo-Server/silo-server/pull/475).
@@ -134,7 +134,8 @@ The plugin remains a stateless provider adapter. It:
    the plugin decrypts the token with a key derived from the user code.
 2. Validates credentials with AniList's `Viewer` query.
 3. Imports AniList watch history by expanding list progress into completed
-   movies and episodes and reverse-mapping them through AniBridge.
+   movies and episodes and reverse-mapping them through AniBridge; the account
+   list is fetched in a single request and cached briefly.
 4. Maps Silo TVDB/TMDB/IMDb movie and episode identity through the daily
    [AniBridge v3 mappings](https://github.com/anibridge/anibridge-mappings),
    falling back through [Anime-Lists](https://github.com/Anime-Lists/anime-lists)
@@ -146,6 +147,8 @@ The plugin remains a stateless provider adapter. It:
    progress through `SaveMediaListEntry`.
 7. Returns typed applied, no-change, rejected, retry, rate-limit, and credential
    outcomes to Silo's durable worker.
+8. Paces AniList requests under the published rate limit and adapts the spacing
+   from AniList's `X-RateLimit` headers.
 
 Credentials and OAuth flow data are transient RPC inputs. The plugin does not
 persist or log them.

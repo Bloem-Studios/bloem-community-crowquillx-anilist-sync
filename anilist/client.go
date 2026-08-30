@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -98,11 +99,6 @@ func (e ListEntry) CompletedProgress() int {
 		progress = 1
 	}
 	return progress
-}
-
-type ListPage struct {
-	Entries     []ListEntry
-	HasNextPage bool
 }
 
 func NewClient(token string, httpClient *http.Client) *Client {
@@ -199,6 +195,12 @@ func (l *rateLimiter) observe(header http.Header, status int) time.Duration {
 		l.next = laterTime(l.next, now.Add(resetAfter+rateLimitPadding))
 	case hasRemaining && remaining == 0:
 		l.next = laterTime(l.next, now.Add(rateLimitWindow))
+	case hasRemaining && hasReset && resetAfter > 0 && remaining > 1:
+		required := resetAfter / time.Duration(remaining)
+		if required > l.interval {
+			l.interval = required
+			l.next = laterTime(l.next, now.Add(required))
+		}
 	}
 	return retryAfter
 }
@@ -238,39 +240,41 @@ func laterTime(left, right time.Time) time.Time {
 	return left
 }
 
-func (c *Client) ListEntriesPage(ctx context.Context, userID, page, perPage int) (ListPage, error) {
+func (c *Client) ListEntries(ctx context.Context, userID int) ([]ListEntry, error) {
 	if userID < 1 {
-		return ListPage{}, fmt.Errorf("AniList user ID is required")
-	}
-	if page < 1 {
-		return ListPage{}, fmt.Errorf("AniList list page must be positive")
-	}
-	if perPage < 1 || perPage > 50 {
-		return ListPage{}, fmt.Errorf("AniList list page size must be between 1 and 50")
+		return nil, fmt.Errorf("AniList user ID is required")
 	}
 	var response struct {
 		Data struct {
-			Page struct {
-				PageInfo struct {
-					HasNextPage bool `json:"hasNextPage"`
-				} `json:"pageInfo"`
-				MediaList []ListEntry `json:"mediaList"`
-			} `json:"Page"`
+			MediaListCollection struct {
+				Lists []struct {
+					Entries []ListEntry `json:"entries"`
+				} `json:"lists"`
+			} `json:"MediaListCollection"`
 		} `json:"data"`
 	}
-	query := `query ($userId: Int!, $page: Int!, $perPage: Int!) {
-		Page(page: $page, perPage: $perPage) {
-			pageInfo { hasNextPage }
-			mediaList(userId: $userId, type: ANIME, sort: MEDIA_ID) {
-				id mediaId status progress
-				media { id format episodes title { romaji english native } startDate { year } }
-			}
-		}
-	}`
-	if err := c.do(ctx, query, map[string]any{"userId": userID, "page": page, "perPage": perPage}, &response); err != nil {
-		return ListPage{}, err
+	query := `query ($userId: Int!) { MediaListCollection(userId: $userId, type: ANIME) { lists { entries { id mediaId status progress media { id format episodes title { romaji english native } startDate { year } } } } } }`
+	if err := c.doWithLimit(ctx, query, map[string]any{"userId": userID}, &response, 64<<20); err != nil {
+		return nil, err
 	}
-	return ListPage{Entries: response.Data.Page.MediaList, HasNextPage: response.Data.Page.PageInfo.HasNextPage}, nil
+	entries := make([]ListEntry, 0)
+	seen := make(map[int]bool)
+	for _, list := range response.Data.MediaListCollection.Lists {
+		for _, entry := range list.Entries {
+			if seen[entry.ID] {
+				continue
+			}
+			seen[entry.ID] = true
+			entries = append(entries, entry)
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].MediaID != entries[j].MediaID {
+			return entries[i].MediaID < entries[j].MediaID
+		}
+		return entries[i].ID < entries[j].ID
+	})
+	return entries, nil
 }
 
 func (c *Client) AdvanceProgress(ctx context.Context, mediaID, progress int) error {
@@ -319,6 +323,10 @@ func (c *Client) AdvanceProgress(ctx context.Context, mediaID, progress int) err
 }
 
 func (c *Client) do(ctx context.Context, query string, variables map[string]any, out any) error {
+	return c.doWithLimit(ctx, query, variables, out, 4<<20)
+}
+
+func (c *Client) doWithLimit(ctx context.Context, query string, variables map[string]any, out any, maxBytes int64) error {
 	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})
 	if err != nil {
 		return fmt.Errorf("encode AniList request: %w", err)
@@ -341,7 +349,7 @@ func (c *Client) do(ctx context.Context, query string, variables map[string]any,
 	if resp.StatusCode != http.StatusOK {
 		return &Error{Status: resp.StatusCode, RetryAfter: retryAfter}
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 	if err != nil {
 		return fmt.Errorf("read AniList response: %w", err)
 	}

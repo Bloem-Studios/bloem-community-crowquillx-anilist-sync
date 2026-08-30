@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
@@ -36,6 +37,11 @@ type server struct {
 
 	manifest *pluginv1.PluginManifest
 	mappings *mapping.Client
+
+	importMu       sync.Mutex
+	importCache    []anilist.ListEntry
+	importUserID   int
+	importLoadedAt time.Time
 }
 
 func (s *server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
@@ -97,7 +103,7 @@ func (s *server) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncLis
 		}
 		userID = account.ID
 	}
-	listPage, err := client.ListEntriesPage(ctx, userID, page, 50)
+	entries, err := s.importEntries(ctx, client, userID)
 	if err != nil {
 		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFromError(err)}, nil
 	}
@@ -105,7 +111,7 @@ func (s *server) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncLis
 	if err != nil {
 		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFromError(err)}, nil
 	}
-	items, err := remoteStates(listPage.Entries, dataset)
+	items, err := remoteStates(entries, dataset)
 	if err != nil {
 		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFromError(err)}, nil
 	}
@@ -119,15 +125,34 @@ func (s *server) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncLis
 		Items:            items[offset:end],
 		CompleteSnapshot: true,
 	}
-	switch {
-	case end < len(items):
+	if end < len(items) {
 		response.NextPageToken = fmt.Sprintf("%d:%d", page, end)
-	case listPage.HasNextPage:
-		response.NextPageToken = fmt.Sprintf("%d:0", page+1)
-	default:
+	} else {
 		response.NextCursor = "full-v1"
 	}
 	return response, nil
+}
+
+// importEntries loads the account's anime list once per user and caches it
+// briefly so a multi-page remote-state traversal costs a single AniList
+// request. Failures are never cached; the next page retries upstream.
+func (s *server) importEntries(ctx context.Context, client *anilist.Client, userID int) ([]anilist.ListEntry, error) {
+	s.importMu.Lock()
+	if len(s.importCache) > 0 && s.importUserID == userID && time.Since(s.importLoadedAt) < 2*time.Minute {
+		entries := s.importCache
+		s.importMu.Unlock()
+		return entries, nil
+	}
+	entries, err := client.ListEntries(ctx, userID)
+	if err != nil {
+		s.importMu.Unlock()
+		return nil, err
+	}
+	s.importCache = entries
+	s.importUserID = userID
+	s.importLoadedAt = time.Now()
+	s.importMu.Unlock()
+	return entries, nil
 }
 
 func requestsWatchedState(kinds []pluginv1.WatchSyncRemoteStateKind) bool {

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -377,5 +379,110 @@ func TestFaultFromError(t *testing.T) {
 				t.Fatalf("retry_after = %v, want %v", got, tt.wantRetry)
 			}
 		})
+	}
+}
+
+// stubMappingTransport serves canned AniBridge and Anime-Lists artifacts for
+// the mapping.Client without touching the network, mirroring how tests stub
+// anilist.Endpoint.
+type stubMappingTransport struct{}
+
+func (stubMappingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	status, body := http.StatusNotFound, ""
+	switch req.URL.String() {
+	case mapping.DefaultURL:
+		status, body = http.StatusOK, `{"$meta":{"schema_version":"3.0.0"},"tvdb_show:100:s1":{"anilist:10":{"1-12":"1-12"}},"tvdb_show:200:s1":{"anilist:11":{"1-12":"1-12"}}}`
+	case mapping.DefaultAnimeListsURL:
+		status, body = http.StatusOK, `<anime-list/>`
+	}
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}, nil
+}
+
+func TestListRemoteStateWalksPaginationWithSingleUpstreamImport(t *testing.T) {
+	anilistCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		anilistCalls++
+		var body struct {
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Variables["userId"] != float64(7) {
+			t.Fatalf("variables = %#v", body.Variables)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"MediaListCollection": map[string]any{
+			"lists": []map[string]any{{"entries": []map[string]any{
+				{
+					"id": 1, "mediaId": 10, "status": "CURRENT", "progress": 1,
+					"media": map[string]any{
+						"id": 10, "format": "TV", "episodes": 12,
+						"title":     map[string]any{"romaji": "Alpha"},
+						"startDate": map[string]any{"year": 2020},
+					},
+				},
+				{
+					"id": 2, "mediaId": 11, "status": "CURRENT", "progress": 1,
+					"media": map[string]any{
+						"id": 11, "format": "TV", "episodes": 12,
+						"title":     map[string]any{"romaji": "Beta"},
+						"startDate": map[string]any{"year": 2021},
+					},
+				},
+			}}},
+		}}})
+	}))
+	defer upstream.Close()
+	old := anilist.Endpoint
+	anilist.Endpoint = upstream.URL
+	t.Cleanup(func() { anilist.Endpoint = old })
+
+	srv := &server{mappings: mapping.NewClient(&http.Client{Transport: stubMappingTransport{}})}
+	request := func(pageToken string) *pluginv1.WatchSyncListRemoteStateRequest {
+		return &pluginv1.WatchSyncListRemoteStateRequest{
+			PageToken: pageToken,
+			PageSize:  1,
+			Context: &pluginv1.WatchSyncAuthenticatedContext{
+				Credentials: &pluginv1.WatchSyncCredentials{
+					AccessToken:      "token",
+					SecretAttributes: map[string]string{"user_id": "7"},
+				},
+			},
+		}
+	}
+
+	total := 0
+	pageToken := ""
+	for pages := 0; ; pages++ {
+		response, err := srv.ListRemoteState(context.Background(), request(pageToken))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.GetFault() != nil {
+			t.Fatalf("fault = %#v", response.GetFault())
+		}
+		total += len(response.GetItems())
+		if pages >= 10 {
+			t.Fatal("pagination walk did not terminate")
+		}
+		if response.GetNextPageToken() == "" {
+			if response.GetNextCursor() != "full-v1" {
+				t.Fatalf("next_cursor = %q, want full-v1", response.GetNextCursor())
+			}
+			break
+		}
+		pageToken = response.GetNextPageToken()
+	}
+	if total != 2 {
+		t.Fatalf("total items = %d, want 2", total)
+	}
+	if anilistCalls != 1 {
+		t.Fatalf("AniList upstream calls = %d, want 1 cached import across pages", anilistCalls)
 	}
 }
