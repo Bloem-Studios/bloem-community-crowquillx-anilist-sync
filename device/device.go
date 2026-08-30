@@ -223,6 +223,7 @@ func faultFromError(err error) *pluginv1.WatchSyncFault {
 	fault := &pluginv1.WatchSyncFault{Code: pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY, SafeMessage: "temporary AniList request failure"}
 	var apiErr *anilist.Error
 	if !errors.As(err, &apiErr) {
+		fault.SafeMessage += transportDetail(err)
 		return fault
 	}
 	switch apiErr.Status {
@@ -258,7 +259,7 @@ func faultFromError(err error) *pluginv1.WatchSyncFault {
 
 // faultDetail renders the distinguishing parts of an anilist.Error so the
 // fault shown in Silo's UI carries the status and message that diagnosis
-// needs. The message alone stays generic for non-anilist errors.
+// needs. Non-anilist errors are rendered by transportDetail instead.
 func faultDetail(apiErr *anilist.Error) string {
 	var parts []string
 	if apiErr.Status > 0 && apiErr.Status != http.StatusOK {
@@ -271,4 +272,21 @@ func faultDetail(apiErr *anilist.Error) string {
 		return " (" + strings.Join(parts, "; ") + ")"
 	}
 	return ""
+}
+
+// transportDetail renders the underlying text of a transport-level error
+// (timeout, DNS, TLS) as a single-line parenthesized suffix so a temporary
+// fault carries diagnosis detail. The text is trimmed so UIs are not flooded.
+func transportDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.TrimSpace(strings.ReplaceAll(err.Error(), "\n", " "))
+	if text == "" {
+		return ""
+	}
+	if len(text) > 200 {
+		text = text[:200] + "..."
+	}
+	return " (" + text + ")"
 }

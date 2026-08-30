@@ -220,6 +220,34 @@ func TestClientPreservesRateLimitRetryAfter(t *testing.T) {
 	}
 }
 
+func TestListEntriesLongBudgetAllowsSlowLargeListImport(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(3 * time.Second)
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"MediaListCollection": map[string]any{
+			"lists": []any{},
+		}}})
+	}))
+	defer server.Close()
+
+	// The default 15s budget must be extended for full-list imports.
+	client := NewClient("token", nil)
+	client.Endpoint = server.URL
+	if _, err := client.ListEntries(context.Background(), 7); err != nil {
+		t.Fatalf("default-budget client failed on a slow import: %v", err)
+	}
+
+	// An explicit caller-configured timeout must still be honored.
+	short := NewClient("token", &http.Client{Timeout: time.Second})
+	short.Endpoint = server.URL
+	started := time.Now()
+	if _, err := short.ListEntries(context.Background(), 7); err == nil {
+		t.Fatal("explicit 1s timeout should still fail on a 3s import")
+	}
+	if elapsed := time.Since(started); elapsed < 900*time.Millisecond {
+		t.Fatalf("short client failed after %v, want the 1s timeout to fire", elapsed)
+	}
+}
+
 func TestLimiterStretchesIntervalAcrossRemainingBudget(t *testing.T) {
 	limiter := newRateLimiter(defaultRequestsPerMinute)
 	resetAt := time.Now().Add(120 * time.Second)

@@ -19,6 +19,9 @@ const (
 	defaultRequestsPerMinute = 30
 	rateLimitWindow          = time.Minute
 	rateLimitPadding         = 100 * time.Millisecond
+
+	defaultClientTimeout = 15 * time.Second
+	listEntriesTimeout   = 120 * time.Second
 )
 
 var sharedRateLimiter = newRateLimiter(defaultRequestsPerMinute)
@@ -104,7 +107,7 @@ func (e ListEntry) CompletedProgress() int {
 func NewClient(token string, httpClient *http.Client) *Client {
 	limiter := &rateLimiter{}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 15 * time.Second}
+		httpClient = &http.Client{Timeout: defaultClientTimeout}
 		limiter = sharedRateLimiter
 	}
 	return &Client{HTTPClient: httpClient, AccessToken: token, Endpoint: Endpoint, limiter: limiter}
@@ -254,7 +257,14 @@ func (c *Client) ListEntries(ctx context.Context, userID int) ([]ListEntry, erro
 		} `json:"data"`
 	}
 	query := `query ($userId: Int!) { MediaListCollection(userId: $userId, type: ANIME) { lists { entries { id mediaId status progress media { id format episodes title { romaji english native } startDate { year } } } } } }`
-	if err := c.doWithLimit(ctx, query, map[string]any{"userId": userID}, &response, 64<<20); err != nil {
+	httpClient := *c.HTTPClient
+	// Very large lists can legitimately exceed the default 15s request
+	// budget; give the full-list import its own longer deadline while
+	// honoring any explicit caller-configured timeout.
+	if httpClient.Timeout == defaultClientTimeout {
+		httpClient.Timeout = listEntriesTimeout
+	}
+	if err := c.doWithLimit(ctx, &httpClient, query, map[string]any{"userId": userID}, &response, 64<<20); err != nil {
 		return nil, err
 	}
 	entries := make([]ListEntry, 0)
@@ -323,10 +333,10 @@ func (c *Client) AdvanceProgress(ctx context.Context, mediaID, progress int) err
 }
 
 func (c *Client) do(ctx context.Context, query string, variables map[string]any, out any) error {
-	return c.doWithLimit(ctx, query, variables, out, 4<<20)
+	return c.doWithLimit(ctx, c.HTTPClient, query, variables, out, 4<<20)
 }
 
-func (c *Client) doWithLimit(ctx context.Context, query string, variables map[string]any, out any, maxBytes int64) error {
+func (c *Client) doWithLimit(ctx context.Context, httpClient *http.Client, query string, variables map[string]any, out any, maxBytes int64) error {
 	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})
 	if err != nil {
 		return fmt.Errorf("encode AniList request: %w", err)
@@ -340,7 +350,7 @@ func (c *Client) doWithLimit(ctx context.Context, query string, variables map[st
 	if err := c.limiter.wait(ctx); err != nil {
 		return fmt.Errorf("wait for AniList request allowance: %w", err)
 	}
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("call AniList: %w", err)
 	}

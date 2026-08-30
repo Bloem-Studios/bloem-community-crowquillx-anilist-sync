@@ -360,10 +360,22 @@ func TestFaultFromError(t *testing.T) {
 			wantMessage: "AniList rejected the request (HTTP 404)",
 		},
 		{
-			name:        "non anilist error keeps generic temporary message",
+			name:        "non anilist error keeps generic message but carries detail",
 			err:         errors.New("network partition"),
 			wantCode:    pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY,
-			wantMessage: "temporary AniList request failure",
+			wantMessage: "temporary AniList request failure (network partition)",
+		},
+		{
+			name:        "transport failure carries underlying error text",
+			err:         errors.New(`call AniList: Post "https://graphql.anilist.co": context deadline exceeded`),
+			wantCode:    pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY,
+			wantMessage: `temporary AniList request failure (call AniList: Post "https://graphql.anilist.co": context deadline exceeded)`,
+		},
+		{
+			name:        "long transport error is trimmed",
+			err:         errors.New(strings.Repeat("x", 250)),
+			wantCode:    pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_TEMPORARY,
+			wantMessage: "temporary AniList request failure (" + strings.Repeat("x", 200) + "...)",
 		},
 	}
 	for _, tt := range tests {
