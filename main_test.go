@@ -176,7 +176,7 @@ func TestManifestAdvertisesWatchedImportAndDeviceCodeConfiguration(t *testing.T)
 }
 
 func TestRemoteStatesExpandAniListProgressIntoMappedEpisodes(t *testing.T) {
-	entry := anilist.ListEntry{ID: 9, MediaID: 42, Status: "CURRENT", Progress: 2}
+	entry := anilist.ListEntry{ID: 9, MediaID: 42, Status: "CURRENT", Progress: 2, UpdatedAt: 1756500000}
 	entry.Media.ID = 42
 	entry.Media.Format = "TV"
 	entry.Media.Title.English = "Example Anime"
@@ -196,6 +196,22 @@ func TestRemoteStatesExpandAniListProgressIntoMappedEpisodes(t *testing.T) {
 		second.GetMedia().GetSeriesExternalIds()["tmdb"] != "200" ||
 		second.GetWatched().GetPlayCount() != 1 {
 		t.Fatalf("second state = %#v", second)
+	}
+	lastWatched := second.GetWatched().GetLastWatchedAt()
+	if lastWatched == nil || lastWatched.AsTime().Unix() != 1756500000 {
+		t.Fatalf("last watched at = %#v", lastWatched)
+	}
+}
+
+func TestRemoteStatesWithoutEntryTimestampOmitLastWatchedAt(t *testing.T) {
+	entry := anilist.ListEntry{ID: 9, MediaID: 42, Status: "CURRENT", Progress: 1}
+	entry.Media.ID = 42
+	entry.Media.Format = "TV"
+	states := remoteStates([]anilist.ListEntry{entry}, mapping.Catalog{AniBridge: mapping.Dataset{
+		"tvdb_show:100:s1": {"anilist:42": {"1-12": "1-12"}},
+	}})
+	if len(states) != 1 || states[0].GetWatched().GetLastWatchedAt() != nil {
+		t.Fatalf("states = %#v", states)
 	}
 }
 

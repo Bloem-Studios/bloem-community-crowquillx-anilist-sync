@@ -188,6 +188,13 @@ func remoteStates(entries []anilist.ListEntry, dataset mapping.Catalog) []*plugi
 			continue
 		}
 		sources := dataset.AniBridge.Reverse(entry.Media.ID, progress)
+		// Silo's host silently drops watched states without a timestamp, so
+		// surface AniList's entry-level update time as the last play. AniList
+		// has no per-episode dates; this is when the user last marked progress.
+		watched := &pluginv1.WatchSyncRemoteWatchedState{PlayCount: 1}
+		if entry.UpdatedAt > 0 {
+			watched.LastWatchedAt = timestamppb.New(time.Unix(int64(entry.UpdatedAt), 0).UTC())
+		}
 		expectMovie := entry.Media.Format == "MOVIE"
 		hasExpectedSource := false
 		for _, source := range sources {
@@ -223,7 +230,7 @@ func remoteStates(entries []anilist.ListEntry, dataset mapping.Catalog) []*plugi
 			states = append(states, &pluginv1.WatchSyncRemoteState{
 				ProviderItemKey: itemKey,
 				Media:           media,
-				Watched:         &pluginv1.WatchSyncRemoteWatchedState{PlayCount: 1},
+				Watched:         watched,
 			})
 		}
 	}

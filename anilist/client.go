@@ -65,11 +65,12 @@ type mediaResponse struct {
 }
 
 type ListEntry struct {
-	ID       int
-	MediaID  int
-	Status   string
-	Progress int
-	Media    struct {
+	ID        int
+	MediaID   int
+	Status    string
+	Progress  int
+	UpdatedAt int
+	Media     struct {
 		ID       int
 		Format   string
 		Episodes *int
@@ -256,7 +257,7 @@ func (c *Client) ListEntries(ctx context.Context, userID int) ([]ListEntry, erro
 			} `json:"MediaListCollection"`
 		} `json:"data"`
 	}
-	query := `query ($userId: Int!) { MediaListCollection(userId: $userId, type: ANIME) { lists { entries { id mediaId status progress media { id format episodes title { romaji english native } startDate { year } } } } } }`
+	query := `query ($userId: Int!) { MediaListCollection(userId: $userId, type: ANIME) { lists { entries { id mediaId status progress updatedAt media { id format episodes title { romaji english native } startDate { year } } } } } }`
 	httpClient := *c.HTTPClient
 	// Very large lists can legitimately exceed the default 15s request
 	// budget; give the full-list import its own longer deadline while
