@@ -90,3 +90,17 @@ jobs:
             release/plugin-darwin-arm64
             release/checksums.txt
             release/repository.json
+
+  notify-catalog:
+    needs: release
+    runs-on: ubuntu-latest
+    # A missing or expired token must never fail a release; the catalog's
+    # 15-minute schedule is the fallback.
+    continue-on-error: true
+    steps:
+      - name: Trigger shared catalog refresh
+        env:
+          GH_TOKEN: ${{ secrets.CATALOG_DISPATCH_TOKEN }}
+        run: |
+          gh api -X POST repos/crowquillx/crowquillx-silo-plugins/dispatches \
+            -f event_type=plugin-released
