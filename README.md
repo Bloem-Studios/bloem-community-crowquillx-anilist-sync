@@ -9,7 +9,7 @@ An AniList watch-sync provider for [Silo Server](https://github.com/Silo-Server/
 > watch-history import behavior are still being stabilized; do not rely on it as
 > the only copy of your watch state.
 
-`main` contains the `v0.3.1` manifest and targets
+`main` contains the `v0.4.0` manifest and targets
 [`silo-plugin-sdk` v0.13.0](https://github.com/Silo-Server/silo-plugin-sdk/releases/tag/v0.13.0).
 Plugin-backed watch providers landed in Silo Server through
 [Silo Server PR #475](https://github.com/Silo-Server/silo-server/pull/475).
@@ -27,7 +27,8 @@ described below.
 - Optionally exports items manually marked watched through a separate,
   disabled-by-default setting.
 - Imports mapped AniList watch history into Silo.
-- Supports AniList OAuth authorization codes and manually issued access tokens.
+- Connects profiles with a validated AniList access token; expiry is read
+  from the token so Silo can warn before reconnection is needed.
 - Preserves completed entries and never lowers AniList progress.
 - Uses AniBridge, Anime-Lists, and ARM mapping sources without guessing by title.
 - Supports Linux amd64, Linux arm64, and Apple silicon macOS.
@@ -36,41 +37,31 @@ described below.
 
 1. Add the repository URL below to Silo's plugin repositories.
 2. Install **AniList Sync** from Silo's plugin catalog.
-3. Create an AniList OAuth application under
-   [AniList developer settings](https://anilist.co/settings/developer). Set its
-   **Redirect URL** to:
-
-   ```text
-   https://anilist.co/api/v2/oauth/pin
-   ```
-
-4. Enter the AniList client ID and client secret in the plugin settings.
-5. Set **Playback completion threshold** to the same watched percentage used by
+3. Set **Playback completion threshold** to the same watched percentage used by
    Silo.
-6. Generate an AniList access token by opening the following URL after replacing
-   `CLIENT_ID` with the application's numeric client ID:
+4. Open the AniList authorize URL:
 
    ```text
-   https://anilist.co/api/v2/oauth/authorize?client_id=CLIENT_ID&response_type=token
+   https://anilist.co/api/v2/oauth/authorize?client_id=49797&response_type=token
    ```
 
-7. Approve the application and copy the access token shown by AniList.
-8. In the desired Silo profile, open **Settings → Watch Providers**, find
-   **AniList**, and select **Connect**. Silo then opens a temporary
-   **Paste your AniList API key** prompt; paste the AniList access token there.
-9. Enable **Sync manually marked watched items** only if manual marks should
+   The client ID belongs to the bundled **Silo AniList Sync** AniList
+   application; advanced users may substitute their own application's client
+   ID, whose redirect URL must be set to
+   `https://anilist.co/api/v2/oauth/pin`.
+5. Approve the application and copy the access token shown by AniList.
+6. In the desired Silo profile, open **Settings → Watch Providers**, find
+   **AniList**, and select **Connect**, then paste the token. Silo validates
+   the token immediately and shows the connected account.
+7. Enable **Sync manually marked watched items** only if manual marks should
    advance AniList.
 
-Current Silo builds expose the plugin's manual access-token connection path.
-AniList calls this value an access token; Silo labels the corresponding field
-as an API key.
+The token AniList calls an access token is what Silo's connect prompt accepts.
 
 ### Provider settings
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| Client ID | Required | Numeric AniList OAuth application ID. |
-| Client secret | Required | AniList OAuth application secret; Silo stores it as a secret. |
 | Sync manually marked watched items | Off | Also export items marked watched without completed playback. |
 | Playback completion threshold | 90% | Percentage playback must exceed before AniList progress advances; valid range 1–99. |
 
@@ -90,8 +81,8 @@ as an API key.
 
 6. Select **Add**. **AniList Sync** will appear in the catalog.
 7. Select **Install** on the AniList Sync card.
-8. Return to the **Installed** tab and select **Configure** to enter the AniList
-   OAuth client ID, client secret, and playback completion threshold.
+8. Return to the **Installed** tab and select **Configure** to set the
+   playback completion threshold.
 9. Follow the access-token steps under [Setup](#setup) for each Silo profile
    that should synchronize watch state.
 
@@ -115,7 +106,6 @@ updates.
 
 Silo owns:
 
-- AniList OAuth application secrets and callback state
 - encrypted credentials scoped to a Silo user and profile
 - durable desired-state events and stable event IDs
 - delivery ordering, retries, rate-limit deferral, and reconciliation
@@ -123,20 +113,19 @@ Silo owns:
 
 The plugin remains a stateless provider adapter. It:
 
-1. Builds AniList authorization URLs and exchanges authorization codes.
-2. Validates credentials with AniList's `Viewer` query.
-3. Imports AniList watch history by expanding list progress into completed
+1. Validates credentials with AniList's `Viewer` query.
+2. Imports AniList watch history by expanding list progress into completed
    movies and episodes and reverse-mapping them through AniBridge.
-4. Maps Silo TVDB/TMDB/IMDb movie and episode identity through the daily
+3. Maps Silo TVDB/TMDB/IMDb movie and episode identity through the daily
    [AniBridge v3 mappings](https://github.com/anibridge/anibridge-mappings),
    falling back through [Anime-Lists](https://github.com/Anime-Lists/anime-lists)
    and the [ARM mapping service](https://github.com/BeeeQueue/arm-server) when
    AniBridge has no direct export mapping.
-5. Advances AniList on completed playback stop events. Manual watched marks use
+4. Advances AniList on completed playback stop events. Manual watched marks use
    the same convergent update only when their separate plugin toggle is enabled.
-6. Reads the existing AniList list entry and applies absolute, monotonic
+5. Reads the existing AniList list entry and applies absolute, monotonic
    progress through `SaveMediaListEntry`.
-7. Returns typed applied, no-change, rejected, retry, rate-limit, and credential
+6. Returns typed applied, no-change, rejected, retry, rate-limit, and credential
    outcomes to Silo's durable worker.
 
 Credentials and OAuth flow data are transient RPC inputs. The plugin does not

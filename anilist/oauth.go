@@ -1,31 +1,13 @@
 package anilist
 
 import (
-	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
-
-const (
-	AuthorizeEndpoint = "https://anilist.co/api/v2/oauth/authorize"
-	TokenEndpoint     = "https://anilist.co/api/v2/oauth/token"
-)
-
-type OAuthClient struct {
-	HTTPClient *http.Client
-	TokenURL   string
-}
-
-type Token struct {
-	AccessToken string
-	TokenType   string
-	ExpiresAt   time.Time
-}
 
 type Account struct {
 	ID         int
@@ -34,67 +16,30 @@ type Account struct {
 	ProfileURL string
 }
 
-func AuthorizationURL(clientID, redirectURI, state string) (string, error) {
-	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(redirectURI) == "" || strings.TrimSpace(state) == "" {
-		return "", fmt.Errorf("client ID, redirect URI, and state are required")
+// TokenExpiresAt reports the expiry encoded in an AniList JWT access token,
+// or the zero time when the claim is absent or unparseable.
+func TokenExpiresAt(accessToken string) time.Time {
+	parts := strings.Split(accessToken, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return time.Time{}
 	}
-	values := url.Values{
-		"client_id":     {clientID},
-		"redirect_uri":  {redirectURI},
-		"response_type": {"code"},
-		"state":         {state},
-	}
-	return AuthorizeEndpoint + "?" + values.Encode(), nil
-}
-
-func (c *OAuthClient) ExchangeCode(ctx context.Context, clientID, clientSecret, redirectURI, code string) (Token, error) {
-	if c.HTTPClient == nil {
-		c.HTTPClient = &http.Client{Timeout: 15 * time.Second}
-	}
-	tokenURL := c.TokenURL
-	if tokenURL == "" {
-		tokenURL = TokenEndpoint
-	}
-	body, err := json.Marshal(map[string]string{
-		"grant_type":    "authorization_code",
-		"client_id":     clientID,
-		"client_secret": clientSecret,
-		"redirect_uri":  redirectURI,
-		"code":          code,
-	})
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return Token{}, fmt.Errorf("encode AniList token request: %w", err)
+		payload, err = base64.RawStdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return time.Time{}
+		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(body))
-	if err != nil {
-		return Token{}, fmt.Errorf("create AniList token request: %w", err)
+	var claims struct {
+		Exp int64 `json:"exp"`
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return Token{}, fmt.Errorf("exchange AniList authorization code: %w", err)
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return time.Time{}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return Token{}, fmt.Errorf("exchange AniList authorization code: HTTP %d", resp.StatusCode)
+	if claims.Exp <= 0 {
+		return time.Time{}
 	}
-	var result struct {
-		AccessToken string `json:"access_token"`
-		TokenType   string `json:"token_type"`
-		ExpiresIn   int    `json:"expires_in"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return Token{}, fmt.Errorf("decode AniList token response: %w", err)
-	}
-	if result.AccessToken == "" || result.ExpiresIn <= 0 {
-		return Token{}, fmt.Errorf("AniList token response is incomplete")
-	}
-	return Token{
-		AccessToken: result.AccessToken,
-		TokenType:   result.TokenType,
-		ExpiresAt:   time.Now().UTC().Add(time.Duration(result.ExpiresIn) * time.Second),
-	}, nil
+	return time.Unix(claims.Exp, 0).UTC()
 }
 
 func (c *Client) Viewer(ctx context.Context) (Account, error) {

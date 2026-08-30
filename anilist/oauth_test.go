@@ -1,35 +1,29 @@
 package anilist
 
 import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
+	"time"
 )
 
-func TestExchangeCode(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		if body["client_id"] != "client" || body["client_secret"] != "secret" || body["code"] != "code" {
-			t.Fatalf("token request = %#v", body)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token": "token",
-			"token_type":   "Bearer",
-			"expires_in":   3600,
-		})
-	}))
-	defer server.Close()
-	client := &OAuthClient{HTTPClient: server.Client(), TokenURL: server.URL}
-	token, err := client.ExchangeCode(context.Background(), "client", "secret", "https://silo/callback", "code")
-	if err != nil {
-		t.Fatal(err)
+func TestTokenExpiresAt(t *testing.T) {
+	const valid = "eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjE3MDAwMDAwMDAsInN1YiI6IjEyMyJ9.e30"
+	if got := TokenExpiresAt(valid); !got.Equal(time.Date(2023, 11, 14, 22, 13, 20, 0, time.UTC)) {
+		t.Fatalf("TokenExpiresAt(valid) = %v, want 2023-11-14T22:13:20Z", got)
 	}
-	if token.AccessToken != "token" || token.TokenType != "Bearer" || token.ExpiresAt.IsZero() {
-		t.Fatalf("token = %#v", token)
+
+	const withoutExp = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.e30"
+	if got := TokenExpiresAt(withoutExp); !got.IsZero() {
+		t.Fatalf("TokenExpiresAt(without exp) = %v, want zero", got)
+	}
+
+	if got := TokenExpiresAt("not a jwt"); !got.IsZero() {
+		t.Fatalf("TokenExpiresAt(garbage) = %v, want zero", got)
+	}
+	if got := TokenExpiresAt("eyJhbGciOiJIUzI1NiJ9.!!!!!.e30"); !got.IsZero() {
+		t.Fatalf("TokenExpiresAt(bad base64) = %v, want zero", got)
+	}
+
+	if got := TokenExpiresAt("only.two"); !got.IsZero() {
+		t.Fatalf("TokenExpiresAt(two segments) = %v, want zero", got)
 	}
 }

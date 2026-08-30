@@ -1,6 +1,6 @@
 {
   "plugin_id": "dev.crowquillx.anilist-sync",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
   "supported_platforms": [
@@ -25,7 +25,6 @@
       "description": "Syncs completed playback and optionally manual watched marks to AniList, and imports mapped watch history.",
       "watch_sync_provider": {
         "auth_methods": [
-          "WATCH_SYNC_AUTH_METHOD_AUTHORIZATION_CODE",
           "WATCH_SYNC_AUTH_METHOD_API_KEY"
         ],
         "export_watched": true,
@@ -51,32 +50,11 @@
     {
       "key": "provider",
       "title": "AniList provider settings",
-      "description": "OAuth credentials and watched synchronization behavior.",
-      "json_schema": "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"client_id\":{\"type\":\"string\",\"pattern\":\"^[0-9]+$\"},\"client_secret\":{\"type\":\"string\",\"minLength\":1},\"sync_manual_watched\":{\"type\":\"boolean\",\"default\":false},\"playback_completion_percent\":{\"type\":\"number\",\"minimum\":1,\"maximum\":99,\"default\":90}},\"required\":[\"client_id\",\"client_secret\"]}",
+      "description": "Watched synchronization behavior.",
+      "json_schema": "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"sync_manual_watched\":{\"type\":\"boolean\",\"default\":false},\"playback_completion_percent\":{\"type\":\"number\",\"minimum\":1,\"maximum\":99,\"default\":90}}}",
       "required": true,
       "admin_form": {
         "fields": [
-          {
-            "key": "client_id",
-            "label": "Client ID",
-            "description": "Numeric AniList OAuth application ID.",
-            "control": "ADMIN_FORM_CONTROL_TEXT",
-            "required": true,
-            "validation": {
-              "pattern": "^[0-9]+$"
-            }
-          },
-          {
-            "key": "client_secret",
-            "label": "Client secret",
-            "description": "AniList OAuth application secret.",
-            "control": "ADMIN_FORM_CONTROL_PASSWORD",
-            "required": true,
-            "secret": true,
-            "validation": {
-              "min_length": 1
-            }
-          },
           {
             "key": "sync_manual_watched",
             "label": "Sync manually marked watched items",
@@ -108,7 +86,7 @@
     "display_name": "AniList Sync",
     "summary": "Reliably synchronize completed anime with AniList through Silo's watch-provider pipeline.",
     "description_markdown": "Uses Silo's host-owned watch-sync pipeline for encrypted per-profile credentials, durable playback completion delivery, optional manual watched marks, retries, imports, and rich episode identity. Episode exports prefer the daily AniBridge v3 dataset, with an Anime-Lists and ARM fallback. Watch-history imports reverse-map AniList progress through AniBridge. AniList progress is monotonic and ambiguous mappings are rejected rather than guessed.",
-    "setup_markdown": "Install the plugin, enter an AniList OAuth application's client ID and secret, and match the playback completion threshold to Silo's watched threshold. Completed playback syncs automatically; enable the separate manual-watched switch only if items marked watched without playback should also sync. Silo stores provider and profile credentials encrypted and invokes this plugin as a stateless provider adapter.",
+    "setup_markdown": "Install the plugin and match the playback completion threshold to Silo's watched threshold. To connect a profile, open https://anilist.co/api/v2/oauth/authorize?client_id=49797&response_type=token, approve access, copy the access token AniList shows, then open Settings → Watch Providers → AniList, select Connect, and paste the token. Silo validates the token against AniList and shows the connected account. Tokens last about one year; reconnect when AniList reports the credential as expired.",
     "homepage_url": "https://github.com/crowquillx/silo-anilist-sync",
     "source_url": "https://github.com/crowquillx/silo-anilist-sync",
     "support_url": "https://github.com/crowquillx/silo-anilist-sync/issues",

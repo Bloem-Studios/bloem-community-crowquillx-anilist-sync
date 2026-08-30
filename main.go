@@ -41,35 +41,16 @@ func (s *server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pl
 	return &pluginv1.GetManifestResponse{Manifest: s.manifest}, nil
 }
 
-func (s *server) InitAuthorize(_ context.Context, req *pluginv1.WatchSyncInitAuthorizeRequest) (*pluginv1.WatchSyncInitAuthorizeResponse, error) {
-	clientID, _ := providerCredentials(req.GetProviderConfig())
-	authorizationURL, err := anilist.AuthorizationURL(clientID, req.GetRedirectUri(), req.GetState())
-	if err != nil {
-		return &pluginv1.WatchSyncInitAuthorizeResponse{Fault: invalidRequestFault(err)}, nil
-	}
-	return &pluginv1.WatchSyncInitAuthorizeResponse{AuthorizationUrl: authorizationURL}, nil
-}
-
-func (s *server) ExchangeCode(ctx context.Context, req *pluginv1.WatchSyncExchangeCodeRequest) (*pluginv1.WatchSyncCredentialResponse, error) {
-	clientID, clientSecret := providerCredentials(req.GetProviderConfig())
-	if clientID == "" || clientSecret == "" || req.GetAuthorizationCode() == "" {
-		return &pluginv1.WatchSyncCredentialResponse{Fault: invalidRequestFault(errors.New("AniList OAuth client and authorization code are required"))}, nil
-	}
-	token, err := (&anilist.OAuthClient{}).ExchangeCode(ctx, clientID, clientSecret, req.GetRedirectUri(), req.GetAuthorizationCode())
-	if err != nil {
-		return &pluginv1.WatchSyncCredentialResponse{Fault: faultFromError(err)}, nil
-	}
-	return credentialResponse(ctx, token.AccessToken, token.TokenType, token.ExpiresAt)
-}
-
 func (s *server) ExchangeAPIKey(ctx context.Context, req *pluginv1.WatchSyncExchangeAPIKeyRequest) (*pluginv1.WatchSyncCredentialResponse, error) {
 	token := strings.TrimSpace(req.GetApiKey())
 	if token == "" {
 		return &pluginv1.WatchSyncCredentialResponse{Fault: invalidRequestFault(errors.New("AniList access token is required"))}, nil
 	}
-	// Manually issued AniList tokens have the same one-year lifetime, but the
-	// exact issue time is unknown. The host will surface reauthorization on 401.
-	return credentialResponse(ctx, token, "Bearer", time.Time{})
+	// credentialResponse runs the Viewer query, which validates the token live
+	// and returns the connected account; a bad or revoked token now fails the
+	// connect with an INVALID_CREDENTIAL fault instead of at first sync. AniList
+	// tokens live ~1 year; the decoded exp lets the host warn before expiry.
+	return credentialResponse(ctx, token, "Bearer", anilist.TokenExpiresAt(token))
 }
 
 func (s *server) RefreshCredentials(context.Context, *pluginv1.WatchSyncRefreshCredentialsRequest) (*pluginv1.WatchSyncCredentialResponse, error) {
@@ -437,14 +418,6 @@ func accountProto(account anilist.Account) *pluginv1.WatchSyncAccount {
 		AvatarUrl:       account.AvatarURL,
 		ProfileUrl:      account.ProfileURL,
 	}
-}
-
-func providerCredentials(config *pluginv1.WatchSyncProviderConfig) (string, string) {
-	if config == nil {
-		return "", ""
-	}
-	return strings.TrimSpace(config.GetValues()["provider.client_id"]),
-		strings.TrimSpace(config.GetSecretValues()["provider.client_secret"])
 }
 
 func applyErrorResult(eventID string, err error) *pluginv1.WatchSyncApplyResult {

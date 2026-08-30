@@ -12,8 +12,9 @@ import (
 	"time"
 )
 
+var Endpoint = "https://graphql.anilist.co"
+
 const (
-	endpoint                 = "https://graphql.anilist.co"
 	defaultRequestsPerMinute = 30
 	rateLimitWindow          = time.Minute
 	rateLimitPadding         = 100 * time.Millisecond
@@ -110,7 +111,7 @@ func NewClient(token string, httpClient *http.Client) *Client {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 		limiter = sharedRateLimiter
 	}
-	return &Client{HTTPClient: httpClient, AccessToken: token, Endpoint: endpoint, limiter: limiter}
+	return &Client{HTTPClient: httpClient, AccessToken: token, Endpoint: Endpoint, limiter: limiter}
 }
 
 type rateLimiter struct {

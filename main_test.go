@@ -6,8 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
+	"time"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 	publicmanifest "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/manifest"
@@ -15,12 +15,21 @@ import (
 	"github.com/crowquillx/silo-anilist-sync/mapping"
 )
 
-func TestInitAuthorizeUsesHostStateAndRedirect(t *testing.T) {
-	s := &server{}
-	resp, err := s.InitAuthorize(context.Background(), &pluginv1.WatchSyncInitAuthorizeRequest{
-		ProviderConfig: &pluginv1.WatchSyncProviderConfig{Values: map[string]string{"provider.client_id": "123"}},
-		RedirectUri:    "https://silo.example/api/v1/watch-providers/oauth/callback",
-		State:          "host-state",
+func TestExchangeAPIKeyConnectsAndSetsExpiry(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"Viewer": map[string]any{
+			"id": 7, "name": "tester",
+			"avatar":  map[string]any{"large": "http://x/y.png"},
+			"siteUrl": "https://anilist.co/user/tester",
+		}}})
+	}))
+	defer upstream.Close()
+	old := anilist.Endpoint
+	anilist.Endpoint = upstream.URL
+	t.Cleanup(func() { anilist.Endpoint = old })
+
+	resp, err := (&server{}).ExchangeAPIKey(context.Background(), &pluginv1.WatchSyncExchangeAPIKeyRequest{
+		ApiKey: "eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjE3MDAwMDAwMDAsInN1YiI6IjEyMyJ9.e30",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -28,12 +37,38 @@ func TestInitAuthorizeUsesHostStateAndRedirect(t *testing.T) {
 	if resp.GetFault() != nil {
 		t.Fatalf("fault = %#v", resp.GetFault())
 	}
-	parsed, err := url.Parse(resp.GetAuthorizationUrl())
+	credentials := resp.GetCredentials()
+	if credentials.GetAccessToken() == "" || credentials.GetTokenType() != "Bearer" {
+		t.Fatalf("credentials = %#v", credentials)
+	}
+	if resp.GetAccount().GetUsername() != "tester" {
+		t.Fatalf("account = %#v", resp.GetAccount())
+	}
+	if got := credentials.GetExpiresAt().AsTime(); !got.Equal(time.Date(2023, 11, 14, 22, 13, 20, 0, time.UTC)) {
+		t.Fatalf("expires_at = %v, want 2023-11-14T22:13:20Z", got)
+	}
+	if credentials.GetSecretAttributes()["user_id"] != "7" {
+		t.Fatalf("secret attributes = %#v", credentials.GetSecretAttributes())
+	}
+}
+
+func TestExchangeAPIKeyRejectsInvalidCredential(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer upstream.Close()
+	old := anilist.Endpoint
+	anilist.Endpoint = upstream.URL
+	t.Cleanup(func() { anilist.Endpoint = old })
+
+	resp, err := (&server{}).ExchangeAPIKey(context.Background(), &pluginv1.WatchSyncExchangeAPIKeyRequest{
+		ApiKey: "garbage.token.value",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Query().Get("client_id") != "123" || parsed.Query().Get("state") != "host-state" || parsed.Query().Get("response_type") != "code" {
-		t.Fatalf("authorization query = %v", parsed.Query())
+	if resp.GetFault().GetCode() != pluginv1.WatchSyncFaultCode_WATCH_SYNC_FAULT_CODE_INVALID_CREDENTIAL {
+		t.Fatalf("fault = %#v", resp.GetFault())
 	}
 }
 
@@ -92,7 +127,7 @@ func TestMappingServiceFailureRetries(t *testing.T) {
 	}
 }
 
-func TestManifestAdvertisesWatchedImportAndOAuthConfiguration(t *testing.T) {
+func TestManifestAdvertisesWatchedImportAndApiKeyConfiguration(t *testing.T) {
 	manifest, err := publicmanifest.Load(manifestJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -104,13 +139,36 @@ func TestManifestAdvertisesWatchedImportAndOAuthConfiguration(t *testing.T) {
 	if !descriptor.GetImportWatched() || !descriptor.GetScrobblePlayback() {
 		t.Fatalf("watch sync descriptor = %#v", descriptor)
 	}
+	authMethods := descriptor.GetAuthMethods()
+	if len(authMethods) != 1 || authMethods[0] != pluginv1.WatchSyncAuthMethod_WATCH_SYNC_AUTH_METHOD_API_KEY {
+		t.Fatalf("auth methods = %#v", authMethods)
+	}
 	if len(manifest.GetGlobalConfigSchema()) != 1 {
 		t.Fatalf("global config schema = %#v", manifest.GetGlobalConfigSchema())
 	}
-	fields := manifest.GetGlobalConfigSchema()[0].GetAdminForm().GetFields()
-	if len(fields) != 4 || fields[0].GetKey() != "client_id" || fields[1].GetKey() != "client_secret" ||
-		!fields[1].GetSecret() || fields[2].GetKey() != "sync_manual_watched" ||
-		fields[3].GetKey() != "playback_completion_percent" {
+	schema := manifest.GetGlobalConfigSchema()[0]
+	var jsonSchema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	}
+	if err := json.Unmarshal([]byte(schema.GetJsonSchema()), &jsonSchema); err != nil {
+		t.Fatal(err)
+	}
+	if len(jsonSchema.Properties) != 2 {
+		t.Fatalf("schema properties = %#v", jsonSchema.Properties)
+	}
+	if _, ok := jsonSchema.Properties["client_id"]; ok {
+		t.Fatal("schema still advertises client_id")
+	}
+	if _, ok := jsonSchema.Properties["client_secret"]; ok {
+		t.Fatal("schema still advertises client_secret")
+	}
+	if len(jsonSchema.Required) != 0 {
+		t.Fatalf("schema required = %#v", jsonSchema.Required)
+	}
+	fields := schema.GetAdminForm().GetFields()
+	if len(fields) != 2 || fields[0].GetKey() != "sync_manual_watched" ||
+		fields[1].GetKey() != "playback_completion_percent" {
 		t.Fatalf("provider fields = %#v", fields)
 	}
 }

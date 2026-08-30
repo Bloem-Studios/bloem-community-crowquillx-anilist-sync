@@ -21,12 +21,12 @@ func TestEncodeCatalogManifestRoundTripsThroughSiloJSONContract(t *testing.T) {
 		t.Fatalf("manifest identity = %q@%q checksum %q", manifest.GetPluginId(), manifest.GetVersion(), manifest.GetChecksum())
 	}
 	descriptor := manifest.GetCapabilities()[0].GetWatchSyncProvider()
-	if len(descriptor.GetAuthMethods()) != 2 || descriptor.GetAuthMethods()[0] != pluginv1.WatchSyncAuthMethod_WATCH_SYNC_AUTH_METHOD_AUTHORIZATION_CODE {
+	if len(descriptor.GetAuthMethods()) != 1 || descriptor.GetAuthMethods()[0] != pluginv1.WatchSyncAuthMethod_WATCH_SYNC_AUTH_METHOD_API_KEY {
 		t.Fatalf("auth methods = %v", descriptor.GetAuthMethods())
 	}
 	fields := manifest.GetGlobalConfigSchema()[0].GetAdminForm().GetFields()
-	if len(fields) != 4 || fields[2].GetControl() != pluginv1.AdminFormControl_ADMIN_FORM_CONTROL_SWITCH ||
-		fields[3].GetDefaultValue().GetNumberValue() != 90 {
+	if len(fields) != 2 || fields[0].GetControl() != pluginv1.AdminFormControl_ADMIN_FORM_CONTROL_SWITCH ||
+		fields[1].GetDefaultValue().GetNumberValue() != 90 {
 		t.Fatalf("admin fields = %#v", fields)
 	}
 }
