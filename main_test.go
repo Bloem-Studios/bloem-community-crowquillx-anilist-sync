@@ -156,7 +156,7 @@ func TestManifestAdvertisesWatchedImportAndDeviceCodeConfiguration(t *testing.T)
 	if err := json.Unmarshal([]byte(schema.GetJsonSchema()), &jsonSchema); err != nil {
 		t.Fatal(err)
 	}
-	if len(jsonSchema.Properties) != 2 {
+	if len(jsonSchema.Properties) != 3 {
 		t.Fatalf("schema properties = %#v", jsonSchema.Properties)
 	}
 	if _, ok := jsonSchema.Properties["client_id"]; ok {
@@ -169,8 +169,9 @@ func TestManifestAdvertisesWatchedImportAndDeviceCodeConfiguration(t *testing.T)
 		t.Fatalf("schema required = %#v", jsonSchema.Required)
 	}
 	fields := schema.GetAdminForm().GetFields()
-	if len(fields) != 2 || fields[0].GetKey() != "sync_manual_watched" ||
-		fields[1].GetKey() != "playback_completion_percent" {
+	if len(fields) != 3 || fields[0].GetKey() != "sync_manual_watched" ||
+		fields[1].GetKey() != "playback_completion_percent" ||
+		fields[2].GetKey() != "import_full_scan" {
 		t.Fatalf("provider fields = %#v", fields)
 	}
 }
@@ -212,6 +213,44 @@ func TestRemoteStatesWithoutEntryTimestampOmitLastWatchedAt(t *testing.T) {
 	}})
 	if len(states) != 1 || states[0].GetWatched().GetLastWatchedAt() != nil {
 		t.Fatalf("states = %#v", states)
+	}
+}
+
+func TestImportCursorRoundTrip(t *testing.T) {
+	if since := parseImportCursor(""); !since.IsZero() {
+		t.Fatalf("empty cursor should mean full scan, got %v", since)
+	}
+	if since := parseImportCursor("full-v1"); !since.IsZero() {
+		t.Fatalf("legacy cursor should mean full scan, got %v", since)
+	}
+	if since := parseImportCursor("inc:notanumber"); !since.IsZero() {
+		t.Fatalf("malformed cursor should mean full scan, got %v", since)
+	}
+	since := parseImportCursor("inc:1756500000")
+	if since.Unix() != 1756500000 {
+		t.Fatalf("since = %v", since)
+	}
+	got := formatImportCursor(since)
+	if parseImportCursor(got).Unix() != 1756500000 {
+		t.Fatalf("formatImportCursor() = %q", got)
+	}
+	if parseImportCursor(formatImportCursor(time.Time{})).IsZero() {
+		t.Fatal("zero time should format to a parseable cursor")
+	}
+}
+
+func TestEntriesChangedSinceKeepsInclusiveBoundary(t *testing.T) {
+	entries := []anilist.ListEntry{
+		{MediaID: 1, UpdatedAt: 50},
+		{MediaID: 2, UpdatedAt: 100},
+		{MediaID: 3, UpdatedAt: 200},
+	}
+	kept := entriesChangedSince(entries, time.Unix(100, 0).UTC())
+	if len(kept) != 2 || kept[0].MediaID != 2 || kept[1].MediaID != 3 {
+		t.Fatalf("kept = %#v", kept)
+	}
+	if all := entriesChangedSince(entries, time.Time{}); len(all) != 3 {
+		t.Fatalf("full scan should keep everything, got %#v", all)
 	}
 }
 
@@ -497,8 +536,11 @@ func TestListRemoteStateWalksPaginationWithSingleUpstreamImport(t *testing.T) {
 			t.Fatal("pagination walk did not terminate")
 		}
 		if response.GetNextPageToken() == "" {
-			if response.GetNextCursor() != "full-v1" {
-				t.Fatalf("next_cursor = %q, want full-v1", response.GetNextCursor())
+			if !response.GetCompleteSnapshot() {
+				t.Fatal("full traversal must be a complete snapshot")
+			}
+			if parseImportCursor(response.GetNextCursor()).IsZero() {
+				t.Fatalf("next_cursor = %q, want a parseable inc cursor", response.GetNextCursor())
 			}
 			break
 		}
@@ -509,5 +551,63 @@ func TestListRemoteStateWalksPaginationWithSingleUpstreamImport(t *testing.T) {
 	}
 	if anilistCalls != 1 {
 		t.Fatalf("AniList upstream calls = %d, want 1 cached import across pages", anilistCalls)
+	}
+}
+
+func TestListRemoteStateIncrementalCursorSkipsUnchangedEntries(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"MediaListCollection": map[string]any{
+			"lists": []map[string]any{{"entries": []map[string]any{
+				{
+					"id": 1, "mediaId": 10, "status": "CURRENT", "progress": 1, "updatedAt": 100,
+					"media": map[string]any{
+						"id": 10, "format": "TV", "episodes": 12,
+						"title":     map[string]any{"romaji": "Alpha"},
+						"startDate": map[string]any{"year": 2020},
+					},
+				},
+				{
+					"id": 2, "mediaId": 11, "status": "CURRENT", "progress": 1, "updatedAt": 900,
+					"media": map[string]any{
+						"id": 11, "format": "TV", "episodes": 12,
+						"title":     map[string]any{"romaji": "Beta"},
+						"startDate": map[string]any{"year": 2021},
+					},
+				},
+			}}},
+		}}})
+	}))
+	defer upstream.Close()
+	old := anilist.Endpoint
+	anilist.Endpoint = upstream.URL
+	t.Cleanup(func() { anilist.Endpoint = old })
+
+	srv := &server{mappings: mapping.NewClient(&http.Client{Transport: stubMappingTransport{}})}
+	response, err := srv.ListRemoteState(context.Background(), &pluginv1.WatchSyncListRemoteStateRequest{
+		Cursor:   "inc:500",
+		PageSize: 25,
+		Context: &pluginv1.WatchSyncAuthenticatedContext{
+			Credentials: &pluginv1.WatchSyncCredentials{
+				AccessToken:      "token",
+				SecretAttributes: map[string]string{"user_id": "7"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetFault() != nil {
+		t.Fatalf("fault = %#v", response.GetFault())
+	}
+	if response.GetCompleteSnapshot() {
+		t.Fatal("incremental traversal must not claim a complete snapshot")
+	}
+	items := response.GetItems()
+	if len(items) != 1 || items[0].GetProviderItemKey() != "anilist:2:s1:e1" {
+		t.Fatalf("items = %#v", items)
+	}
+	next := parseImportCursor(response.GetNextCursor())
+	if next.IsZero() || next.Unix() < 900 {
+		t.Fatalf("next_cursor = %q", response.GetNextCursor())
 	}
 }

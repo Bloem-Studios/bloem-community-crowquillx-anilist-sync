@@ -25,8 +25,11 @@ func TestEncodeCatalogManifestRoundTripsThroughSiloJSONContract(t *testing.T) {
 		t.Fatalf("auth methods = %v", descriptor.GetAuthMethods())
 	}
 	fields := manifest.GetGlobalConfigSchema()[0].GetAdminForm().GetFields()
-	if len(fields) != 2 || fields[0].GetControl() != pluginv1.AdminFormControl_ADMIN_FORM_CONTROL_SWITCH ||
-		fields[1].GetDefaultValue().GetNumberValue() != 90 {
+	if len(fields) != 3 ||
+		fields[0].GetControl() != pluginv1.AdminFormControl_ADMIN_FORM_CONTROL_SWITCH ||
+		fields[1].GetDefaultValue().GetNumberValue() != 90 ||
+		fields[2].GetKey() != "import_full_scan" ||
+		fields[2].GetControl() != pluginv1.AdminFormControl_ADMIN_FORM_CONTROL_SWITCH {
 		t.Fatalf("admin fields = %#v", fields)
 	}
 }

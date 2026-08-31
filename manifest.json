@@ -1,6 +1,6 @@
 {
   "plugin_id": "dev.crowquillx.anilist-sync",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
   "supported_platforms": [
@@ -51,7 +51,7 @@
       "key": "provider",
       "title": "AniList provider settings",
       "description": "Watched synchronization behavior.",
-      "json_schema": "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"sync_manual_watched\":{\"type\":\"boolean\",\"default\":false},\"playback_completion_percent\":{\"type\":\"number\",\"minimum\":1,\"maximum\":99,\"default\":90}}}",
+      "json_schema": "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"sync_manual_watched\":{\"type\":\"boolean\",\"default\":false},\"playback_completion_percent\":{\"type\":\"number\",\"minimum\":1,\"maximum\":99,\"default\":90},\"import_full_scan\":{\"type\":\"boolean\",\"default\":false}}}",
       "required": true,
       "admin_form": {
         "fields": [
@@ -75,6 +75,13 @@
               "has_max": true,
               "max": 99
             }
+          },
+          {
+            "key": "import_full_scan",
+            "label": "Full import scan",
+            "description": "Rescan the complete AniList list on the next sync instead of only entries changed since the last scan. Turn off again afterwards to resume fast incremental syncs.",
+            "control": "ADMIN_FORM_CONTROL_SWITCH",
+            "default_value": false
           }
         ],
         "submit_label": "Save AniList settings"

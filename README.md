@@ -9,7 +9,7 @@ An AniList watch-sync provider for [Silo Server](https://github.com/Silo-Server/
 > only copy of your watch state. The device activation flow shipped in v0.5.0
 > and is live in production.
 
-`main` contains the `v0.5.5` manifest and targets
+`main` contains the `v0.6.0` manifest and targets
 [`silo-plugin-sdk` v0.13.0](https://github.com/Silo-Server/silo-plugin-sdk/releases/tag/v0.13.0).
 Plugin-backed watch providers landed in Silo Server through
 [Silo Server PR #475](https://github.com/Silo-Server/silo-server/pull/475).
@@ -80,6 +80,14 @@ The token AniList calls an access token is what Silo's connect prompt accepts.
 | --- | --- | --- |
 | Sync manually marked watched items | Off | Also export items marked watched without completed playback. |
 | Playback completion threshold | 90% | Percentage playback must exceed before AniList progress advances; valid range 1–99. |
+| Full import scan | Off | Force the next watched-import to rescan the complete AniList list instead of only entries changed since the previous scan. Turn it off again afterwards to resume fast incremental syncs. |
+
+Watched imports are incremental: the plugin records a checkpoint when a list
+snapshot is fetched and, on later syncs, only entries AniList reports as
+updated at or after that moment are reverse-mapped and reported to Silo.
+Unchanged lists cost a single AniList request and finish in seconds. Silo's
+watched import only adds history, so incremental traversals are safe; the
+full-scan toggle re-reads everything when you want a from-scratch pass.
 
 ## Install and update through Silo
 

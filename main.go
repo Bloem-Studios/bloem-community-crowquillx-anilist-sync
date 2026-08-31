@@ -103,13 +103,19 @@ func (s *server) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncLis
 		}
 		userID = account.ID
 	}
-	entries, err := s.importEntries(ctx, client, userID)
+	entries, fetchedAt, err := s.importEntries(ctx, client, userID)
 	if err != nil {
 		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFromError(err)}, nil
 	}
 	dataset, err := s.mappings.Dataset(ctx)
 	if err != nil {
 		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFromError(err)}, nil
+	}
+	fullScan, _ := strconv.ParseBool(req.GetContext().GetProviderConfig().GetValues()["provider.import_full_scan"])
+	since := parseImportCursor(req.GetCursor())
+	incremental := !since.IsZero() && !fullScan
+	if incremental {
+		entries = entriesChangedSince(entries, since)
 	}
 	items := remoteStates(entries, dataset)
 	if offset > len(items) {
@@ -120,36 +126,89 @@ func (s *server) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncLis
 	end := min(len(items), offset+pageSize)
 	response := &pluginv1.WatchSyncListRemoteStateResponse{
 		Items:            items[offset:end],
-		CompleteSnapshot: true,
+		CompleteSnapshot: !incremental,
 	}
 	if end < len(items) {
 		response.NextPageToken = fmt.Sprintf("%d:%d", page, end)
 	} else {
-		response.NextCursor = "full-v1"
+		// The durable checkpoint is the moment the list was fetched, so the
+		// next traversal sees every entry updated at or after this snapshot.
+		response.NextCursor = formatImportCursor(fetchedAt)
 	}
 	return response, nil
 }
 
+// entriesChangedSince keeps list entries updated at or after the traversal
+// checkpoint. The inclusive boundary closes the race where an entry is
+// updated in the same second the previous snapshot was fetched. A zero time
+// (full scan) keeps everything.
+func entriesChangedSince(entries []anilist.ListEntry, since time.Time) []anilist.ListEntry {
+	if since.IsZero() {
+		return entries
+	}
+	filtered := make([]anilist.ListEntry, 0, len(entries))
+	for _, entry := range entries {
+		if int64(entry.UpdatedAt) >= since.Unix() {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+const (
+	importCursorPrefix = "inc:"
+	// importCacheTTL covers a whole remote-state traversal so every page
+	// observes one stable list snapshot; a full traversal pages through
+	// Silo's host one batch at a time and can outlive short TTLs.
+	importCacheTTL = 30 * time.Minute
+)
+
+// parseImportCursor reads the durable traversal checkpoint. Empty or
+// unrecognized cursors (first run, pre-0.6.0 "full-v1", another format)
+// mean a full traversal.
+func parseImportCursor(cursor string) time.Time {
+	trimmed, ok := strings.CutPrefix(strings.TrimSpace(cursor), importCursorPrefix)
+	if !ok {
+		return time.Time{}
+	}
+	sec, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || sec <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0).UTC()
+}
+
+// formatImportCursor renders the checkpoint for the given list snapshot.
+func formatImportCursor(fetchedAt time.Time) string {
+	if fetchedAt.IsZero() {
+		fetchedAt = time.Now().UTC()
+	}
+	return importCursorPrefix + strconv.FormatInt(fetchedAt.Unix(), 10)
+}
+
 // importEntries loads the account's anime list once per user and caches it
-// briefly so a multi-page remote-state traversal costs a single AniList
-// request. Failures are never cached; the next page retries upstream.
-func (s *server) importEntries(ctx context.Context, client *anilist.Client, userID int) ([]anilist.ListEntry, error) {
+// so a multi-page remote-state traversal costs a single AniList request and
+// every page observes one stable snapshot. Failures are never cached; the
+// next page retries upstream. The returned time is when that snapshot was
+// fetched; it anchors the durable incremental cursor.
+func (s *server) importEntries(ctx context.Context, client *anilist.Client, userID int) ([]anilist.ListEntry, time.Time, error) {
 	s.importMu.Lock()
-	if len(s.importCache) > 0 && s.importUserID == userID && time.Since(s.importLoadedAt) < 2*time.Minute {
-		entries := s.importCache
+	if len(s.importCache) > 0 && s.importUserID == userID && time.Since(s.importLoadedAt) < importCacheTTL {
+		entries, fetchedAt := s.importCache, s.importLoadedAt
 		s.importMu.Unlock()
-		return entries, nil
+		return entries, fetchedAt, nil
 	}
 	entries, err := client.ListEntries(ctx, userID)
 	if err != nil {
 		s.importMu.Unlock()
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	s.importCache = entries
 	s.importUserID = userID
-	s.importLoadedAt = time.Now()
+	s.importLoadedAt = time.Now().UTC()
+	fetchedAt := s.importLoadedAt
 	s.importMu.Unlock()
-	return entries, nil
+	return entries, fetchedAt, nil
 }
 
 func requestsWatchedState(kinds []pluginv1.WatchSyncRemoteStateKind) bool {
