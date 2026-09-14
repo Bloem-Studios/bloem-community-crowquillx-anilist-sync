@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,6 +63,117 @@ func TestAdvanceProgressCompletesNewEntryAtEpisodeCount(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+func TestAdvanceProgressIfExistingSkipsMissingEntry(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(body.Query, "SaveMediaListEntry") {
+			t.Fatal("missing entry must not be mutated")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"Media": map[string]any{
+			"episodes": 12, "mediaListEntry": nil,
+		}}})
+	}))
+	defer server.Close()
+	client := NewClient("token", server.Client())
+	client.Endpoint = server.URL
+	applied, err := client.AdvanceProgressIfExisting(context.Background(), 1, 13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied {
+		t.Fatal("missing entry was reported as applied")
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want one authenticated membership lookup", requests)
+	}
+}
+
+func TestAdvanceProgressIfExistingAllowsExistingEntry(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if requests == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"Media": map[string]any{
+				"episodes": 12, "mediaListEntry": map[string]any{"id": 77, "progress": 1, "status": "PLANNING"},
+			}}})
+			return
+		}
+		if !strings.Contains(body.Query, "SaveMediaListEntry") || body.Variables["id"] != float64(77) ||
+			body.Variables["progress"] != float64(2) || body.Variables["status"] != "CURRENT" {
+			t.Fatalf("mutation = %#v", body)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"SaveMediaListEntry": map[string]any{"id": 77}}})
+	}))
+	defer server.Close()
+	client := NewClient("token", server.Client())
+	client.Endpoint = server.URL
+	applied, err := client.AdvanceProgressIfExisting(context.Background(), 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied || requests != 2 {
+		t.Fatalf("applied = %v, requests = %d; want mutation after lookup", applied, requests)
+	}
+}
+
+func TestAdvanceProgressIfExistingUsesAuthenticatedAccount(t *testing.T) {
+	mutations := make(map[string]int)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		token := r.Header.Get("Authorization")
+		var body struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(body.Query, "SaveMediaListEntry") {
+			mutations[token]++
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"SaveMediaListEntry": map[string]any{"id": 42}}})
+			return
+		}
+		var entry any
+		if token == "Bearer account-a" {
+			entry = map[string]any{"id": 42, "progress": 1, "status": "CURRENT"}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"Media": map[string]any{
+			"episodes": 12, "mediaListEntry": entry,
+		}}})
+	}))
+	defer server.Close()
+
+	accountA := NewClient("account-a", server.Client())
+	accountA.Endpoint = server.URL
+	applied, err := accountA.AdvanceProgressIfExisting(context.Background(), 1, 2)
+	if err != nil || !applied {
+		t.Fatalf("account A: applied = %v, err = %v", applied, err)
+	}
+	accountB := NewClient("account-b", server.Client())
+	accountB.Endpoint = server.URL
+	applied, err = accountB.AdvanceProgressIfExisting(context.Background(), 1, 2)
+	if err != nil || applied {
+		t.Fatalf("account B: applied = %v, err = %v", applied, err)
+	}
+	if requests != 3 || mutations["Bearer account-a"] != 1 || mutations["Bearer account-b"] != 0 {
+		t.Fatalf("requests = %d, mutations = %#v; want independent account lookups", requests, mutations)
 	}
 }
 

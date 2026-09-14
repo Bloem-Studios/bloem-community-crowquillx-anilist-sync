@@ -156,7 +156,7 @@ func TestManifestAdvertisesWatchedImportAndDeviceCodeConfiguration(t *testing.T)
 	if err := json.Unmarshal([]byte(schema.GetJsonSchema()), &jsonSchema); err != nil {
 		t.Fatal(err)
 	}
-	if len(jsonSchema.Properties) != 3 {
+	if len(jsonSchema.Properties) != 4 {
 		t.Fatalf("schema properties = %#v", jsonSchema.Properties)
 	}
 	if _, ok := jsonSchema.Properties["client_id"]; ok {
@@ -165,14 +165,37 @@ func TestManifestAdvertisesWatchedImportAndDeviceCodeConfiguration(t *testing.T)
 	if _, ok := jsonSchema.Properties["client_secret"]; ok {
 		t.Fatal("schema still advertises client_secret")
 	}
+	var onlyExisting struct {
+		Default bool `json:"default"`
+	}
+	if err := json.Unmarshal(jsonSchema.Properties["only_existing_entries"], &onlyExisting); err != nil {
+		t.Fatal(err)
+	}
+	if onlyExisting.Default {
+		t.Fatal("only_existing_entries must default to false")
+	}
 	if len(jsonSchema.Required) != 0 {
 		t.Fatalf("schema required = %#v", jsonSchema.Required)
 	}
 	fields := schema.GetAdminForm().GetFields()
-	if len(fields) != 3 || fields[0].GetKey() != "sync_manual_watched" ||
+	if len(fields) != 4 || fields[0].GetKey() != "sync_manual_watched" ||
 		fields[1].GetKey() != "playback_completion_percent" ||
-		fields[2].GetKey() != "import_full_scan" {
+		fields[2].GetKey() != "import_full_scan" ||
+		fields[3].GetKey() != "only_existing_entries" ||
+		fields[3].GetDefaultValue() == nil || fields[3].GetDefaultValue().GetBoolValue() {
 		t.Fatalf("provider fields = %#v", fields)
+	}
+}
+
+func TestWatchBehaviorParsesExistingOnlySetting(t *testing.T) {
+	if behavior := watchBehaviorFromConfig(nil); behavior.onlyExistingEntries {
+		t.Fatal("only_existing_entries must default to false")
+	}
+	behavior := watchBehaviorFromConfig(&pluginv1.WatchSyncProviderConfig{Values: map[string]string{
+		"provider.only_existing_entries": "true",
+	}})
+	if !behavior.onlyExistingEntries {
+		t.Fatal("only_existing_entries=true was not parsed")
 	}
 }
 
@@ -260,6 +283,108 @@ func TestRemotePageTokenRejectsMalformedValues(t *testing.T) {
 	}
 	if page, offset, err := remotePageToken("2:7"); err != nil || page != 2 || offset != 7 {
 		t.Fatalf("remotePageToken() = %d, %d, %v", page, offset, err)
+	}
+}
+
+func TestOnlyExistingEntriesSkipsMissingTarget(t *testing.T) {
+	queries, mutations := 0, 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries++
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(request.Query, "SaveMediaListEntry") {
+			mutations++
+			t.Fatal("missing target must not be mutated")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"Media": map[string]any{
+			"episodes": 12, "mediaListEntry": nil,
+		}}})
+	}))
+	defer upstream.Close()
+	client := anilist.NewClient("token", upstream.Client())
+	client.Endpoint = upstream.URL
+	dataset := mapping.Catalog{AniBridge: mapping.Dataset{
+		"tvdb_show:1:s1": {"anilist:10": {"1-12": "1-12"}},
+	}}
+	event := &pluginv1.WatchSyncEvent{
+		EventId:   "existing-only-missing",
+		Operation: pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_MARK_WATCHED,
+		Origin:    pluginv1.WatchSyncOrigin_WATCH_SYNC_ORIGIN_PLAYBACK_COMPLETION,
+		Media: &pluginv1.WatchSyncMedia{
+			MediaType:         pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_EPISODE,
+			SeasonNumber:      1,
+			EpisodeNumber:     3,
+			SeriesExternalIds: map[string]string{"tvdb": "1"},
+		},
+	}
+	result := applyEvent(context.Background(), client, dataset, event, watchBehavior{onlyExistingEntries: true})
+	if result.GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_NO_CHANGE {
+		t.Fatalf("status = %v, want no change; fault = %#v", result.GetStatus(), result.GetFault())
+	}
+	if queries != 1 || mutations != 0 {
+		t.Fatalf("AniList requests = %d queries, %d mutations; want 1 query and no mutations", queries, mutations)
+	}
+}
+
+func TestOnlyExistingEntriesAppliesMixedTargets(t *testing.T) {
+	queries, mutations := 0, 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(request.Query, "SaveMediaListEntry") {
+			mutations++
+			if request.Variables["id"] != float64(11) || request.Variables["progress"] != float64(3) {
+				t.Fatalf("mutation variables = %#v", request.Variables)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"SaveMediaListEntry": map[string]any{"id": 11}}})
+			return
+		}
+		queries++
+		if request.Variables["id"] == float64(10) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"Media": map[string]any{
+				"episodes": 12, "mediaListEntry": nil,
+			}}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"Media": map[string]any{
+			"episodes": 12, "mediaListEntry": map[string]any{"id": 11, "progress": 1, "status": "CURRENT"},
+		}}})
+	}))
+	defer upstream.Close()
+	client := anilist.NewClient("token", upstream.Client())
+	client.Endpoint = upstream.URL
+	dataset := mapping.Catalog{AniBridge: mapping.Dataset{
+		"tvdb_show:1:s1": {
+			"anilist:10": {"1-12": "1-12"},
+			"anilist:11": {"1-12": "1-12"},
+		},
+	}}
+	event := &pluginv1.WatchSyncEvent{
+		EventId:   "existing-only-mixed",
+		Operation: pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_MARK_WATCHED,
+		Origin:    pluginv1.WatchSyncOrigin_WATCH_SYNC_ORIGIN_PLAYBACK_COMPLETION,
+		Media: &pluginv1.WatchSyncMedia{
+			MediaType:         pluginv1.WatchSyncMediaType_WATCH_SYNC_MEDIA_TYPE_EPISODE,
+			SeasonNumber:      1,
+			EpisodeNumber:     3,
+			SeriesExternalIds: map[string]string{"tvdb": "1"},
+		},
+	}
+	result := applyEvent(context.Background(), client, dataset, event, watchBehavior{onlyExistingEntries: true})
+	if result.GetStatus() != pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED {
+		t.Fatalf("status = %v, want applied; fault = %#v", result.GetStatus(), result.GetFault())
+	}
+	if queries != 2 || mutations != 1 {
+		t.Fatalf("AniList requests = %d queries, %d mutations; want 2 queries and 1 mutation", queries, mutations)
 	}
 }
 

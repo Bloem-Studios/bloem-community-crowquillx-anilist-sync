@@ -325,6 +325,7 @@ func (s *server) ApplyEvents(ctx context.Context, req *pluginv1.WatchSyncApplyEv
 type watchBehavior struct {
 	syncManualWatched         bool
 	playbackCompletionPercent float64
+	onlyExistingEntries       bool
 }
 
 func watchBehaviorFromConfig(config *pluginv1.WatchSyncProviderConfig) watchBehavior {
@@ -333,6 +334,7 @@ func watchBehaviorFromConfig(config *pluginv1.WatchSyncProviderConfig) watchBeha
 		return behavior
 	}
 	behavior.syncManualWatched, _ = strconv.ParseBool(config.GetValues()["provider.sync_manual_watched"])
+	behavior.onlyExistingEntries, _ = strconv.ParseBool(config.GetValues()["provider.only_existing_entries"])
 	if threshold, err := strconv.ParseFloat(config.GetValues()["provider.playback_completion_percent"], 64); err == nil &&
 		threshold >= 1 && threshold <= 99 {
 		behavior.playbackCompletionPercent = threshold
@@ -399,10 +401,23 @@ func applyEvent(ctx context.Context, client *anilist.Client, dataset mapping.Cat
 		ids = append(ids, id)
 	}
 	sort.Ints(ids)
+	applied := !behavior.onlyExistingEntries
 	for _, id := range ids {
+		if behavior.onlyExistingEntries {
+			updated, err := client.AdvanceProgressIfExisting(ctx, id, targets[id])
+			if err != nil {
+				return applyErrorResult(event.GetEventId(), err)
+			}
+			applied = applied || updated
+			continue
+		}
 		if err := client.AdvanceProgress(ctx, id, targets[id]); err != nil {
 			return applyErrorResult(event.GetEventId(), err)
 		}
+	}
+	if !applied {
+		result.Status = pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_NO_CHANGE
+		return result
 	}
 	result.Status = pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_APPLIED
 	return result

@@ -26,6 +26,8 @@ described below.
   threshold.
 - Optionally exports items manually marked watched through a separate,
   disabled-by-default setting.
+- Optionally limits exports to anime already on the connected AniList account's
+  list, preventing false matches from adding unexpected titles.
 - Imports mapped AniList watch history into Silo.
 - Connects profiles through a device activation flow. The browser encrypts
   the token to a key derived from the activation code, and the bridge never
@@ -81,6 +83,7 @@ The token AniList calls an access token is what Silo's connect prompt accepts.
 | Sync manually marked watched items | Off | Also export items marked watched without completed playback. |
 | Playback completion threshold | 90% | Percentage playback must exceed before AniList progress advances; valid range 1–99. |
 | Full import scan | Off | Force the next watched-import to rescan the complete AniList list instead of only entries changed since the previous scan. Turn it off again afterwards to resume fast incremental syncs. |
+| Only update anime already on AniList | Off | Export progress only for titles already on the connected account's list. Add titles to Plan to Watch before watching. |
 
 Watched imports are incremental: the plugin records a checkpoint when a list
 snapshot is fetched and, on later syncs, only entries AniList reports as
@@ -88,6 +91,29 @@ updated at or after that moment are reverse-mapped and reported to Silo.
 Unchanged lists cost a single AniList request and finish in seconds. Silo's
 watched import only adds history, so incremental traversals are safe; the
 full-scan toggle re-reads everything when you want a from-scratch pass.
+
+### Reducing false matches
+
+Enable **Only update anime already on AniList** in the plugin's configuration
+to prevent exports from creating new AniList entries. Add the anime you want
+to sync to **Plan to Watch** on AniList before watching in Silo. The restriction
+applies to completed playback and enabled manual watched exports. Existing
+installations keep automatic additions until this setting is enabled.
+
+The setting applies to the whole plugin installation, but each export checks
+the connected AniList account's own list. Profiles connected to different
+AniList accounts can therefore allow different titles. Profiles sharing an
+AniList account share its list. Skipped events are acknowledged without a
+change; adding a title later does not automatically replay those events.
+
+This reduces unwanted additions, but an incorrect match can still update a
+title already on your list. It does not restrict watched-history imports.
+Disable watched-history import for the profile in **Settings → Watch
+Providers → AniList** if imported matches are affecting unrelated Silo items.
+
+The current watch-provider interface does not pass Silo profile or library
+identity to this plugin. Per-profile library selection needs host support;
+this option works with the existing interface and requires no server changes.
 
 ## Install and update through Silo
 

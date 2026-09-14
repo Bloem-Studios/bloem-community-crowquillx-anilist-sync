@@ -289,32 +289,50 @@ func (c *Client) ListEntries(ctx context.Context, userID int) ([]ListEntry, erro
 }
 
 func (c *Client) AdvanceProgress(ctx context.Context, mediaID, progress int) error {
+	_, err := c.advanceProgress(ctx, mediaID, progress, false)
+	return err
+}
+
+// AdvanceProgressIfExisting advances progress only when the authenticated
+// AniList user already has a list entry for the anime. It returns whether a
+// SaveMediaListEntry mutation was applied.
+func (c *Client) AdvanceProgressIfExisting(ctx context.Context, mediaID, progress int) (bool, error) {
+	return c.advanceProgress(ctx, mediaID, progress, true)
+}
+
+func (c *Client) advanceProgress(ctx context.Context, mediaID, progress int, onlyExisting bool) (bool, error) {
 	if c.AccessToken == "" {
-		return fmt.Errorf("AniList access token is not configured")
+		return false, fmt.Errorf("AniList access token is not configured")
 	}
 	if progress < 1 {
-		return nil
+		return false, nil
 	}
 	var current mediaResponse
 	query := `query ($id: Int!) { Media(id: $id, type: ANIME) { episodes mediaListEntry { id progress status } } }`
 	if err := c.do(ctx, query, map[string]any{"id": mediaID}, &current); err != nil {
-		return err
+		return false, err
+	}
+	entry := current.Data.Media.MediaListEntry
+	if entry == nil && onlyExisting {
+		return false, nil
 	}
 	episodes := current.Data.Media.Episodes
 	if episodes != nil && *episodes > 0 && progress > *episodes {
-		return fmt.Errorf("mapped progress %d exceeds AniList episode count %d", progress, *episodes)
+		return false, fmt.Errorf("mapped progress %d exceeds AniList episode count %d", progress, *episodes)
 	}
-	entry := current.Data.Media.MediaListEntry
 	if entry == nil {
 		status := "CURRENT"
 		if episodes != nil && progress == *episodes {
 			status = "COMPLETED"
 		}
 		mutation := `mutation ($mediaId: Int!, $progress: Int!, $status: MediaListStatus!) { SaveMediaListEntry(mediaId: $mediaId, progress: $progress, status: $status) { id } }`
-		return c.do(ctx, mutation, map[string]any{"mediaId": mediaID, "progress": progress, "status": status}, &struct{}{})
+		if err := c.do(ctx, mutation, map[string]any{"mediaId": mediaID, "progress": progress, "status": status}, &struct{}{}); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	if entry.Status == "COMPLETED" || entry.Progress >= progress {
-		return nil
+		return false, nil
 	}
 	status := entry.Status
 	switch entry.Status {
@@ -327,10 +345,16 @@ func (c *Client) AdvanceProgress(ctx context.Context, mediaID, progress int) err
 	}
 	if status == entry.Status {
 		mutation := `mutation ($id: Int!, $progress: Int!) { SaveMediaListEntry(id: $id, progress: $progress) { id } }`
-		return c.do(ctx, mutation, map[string]any{"id": entry.ID, "progress": progress}, &struct{}{})
+		if err := c.do(ctx, mutation, map[string]any{"id": entry.ID, "progress": progress}, &struct{}{}); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	mutation := `mutation ($id: Int!, $progress: Int!, $status: MediaListStatus!) { SaveMediaListEntry(id: $id, progress: $progress, status: $status) { id } }`
-	return c.do(ctx, mutation, map[string]any{"id": entry.ID, "progress": progress, "status": status}, &struct{}{})
+	if err := c.do(ctx, mutation, map[string]any{"id": entry.ID, "progress": progress, "status": status}, &struct{}{}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *Client) do(ctx context.Context, query string, variables map[string]any, out any) error {
