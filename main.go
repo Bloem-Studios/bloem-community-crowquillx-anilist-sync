@@ -22,6 +22,7 @@ import (
 	"github.com/crowquillx/silo-anilist-sync/anilist"
 	"github.com/crowquillx/silo-anilist-sync/device"
 	"github.com/crowquillx/silo-anilist-sync/mapping"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -42,6 +43,22 @@ type server struct {
 	importCache    []anilist.ListEntry
 	importUserID   int
 	importLoadedAt time.Time
+
+	preparedMu    sync.Mutex
+	preparedCache *preparedImport
+}
+
+type preparedImportKey struct {
+	userID     int
+	credential [sha256.Size]byte
+	snapshotAt time.Time
+	sinceUnix  int64
+	fullScan   bool
+}
+
+type preparedImport struct {
+	key    preparedImportKey
+	states []*pluginv1.WatchSyncRemoteState
 }
 
 func (s *server) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
@@ -107,17 +124,13 @@ func (s *server) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncLis
 	if err != nil {
 		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFromError(err)}, nil
 	}
-	dataset, err := s.mappings.Dataset(ctx)
-	if err != nil {
-		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFromError(err)}, nil
-	}
 	fullScan, _ := strconv.ParseBool(req.GetContext().GetProviderConfig().GetValues()["provider.import_full_scan"])
 	since := parseImportCursor(req.GetCursor())
 	incremental := !since.IsZero() && !fullScan
-	if incremental {
-		entries = entriesChangedSince(entries, since)
+	items, err := s.preparedImportStates(ctx, userID, credentials.GetAccessToken(), entries, fetchedAt, since, fullScan)
+	if err != nil {
+		return &pluginv1.WatchSyncListRemoteStateResponse{Fault: faultFromError(err)}, nil
 	}
-	items := remoteStates(entries, dataset)
 	if offset > len(items) {
 		return &pluginv1.WatchSyncListRemoteStateResponse{
 			Fault: invalidRequestFault(errors.New("remote state page token is out of range")),
@@ -125,7 +138,7 @@ func (s *server) ListRemoteState(ctx context.Context, req *pluginv1.WatchSyncLis
 	}
 	end := min(len(items), offset+pageSize)
 	response := &pluginv1.WatchSyncListRemoteStateResponse{
-		Items:            items[offset:end],
+		Items:            cloneRemoteStates(items[offset:end]),
 		CompleteSnapshot: !incremental,
 	}
 	if end < len(items) {
@@ -193,7 +206,7 @@ func formatImportCursor(fetchedAt time.Time) string {
 // fetched; it anchors the durable incremental cursor.
 func (s *server) importEntries(ctx context.Context, client *anilist.Client, userID int) ([]anilist.ListEntry, time.Time, error) {
 	s.importMu.Lock()
-	if len(s.importCache) > 0 && s.importUserID == userID && time.Since(s.importLoadedAt) < importCacheTTL {
+	if s.importUserID == userID && !s.importLoadedAt.IsZero() && time.Since(s.importLoadedAt) < importCacheTTL {
 		entries, fetchedAt := s.importCache, s.importLoadedAt
 		s.importMu.Unlock()
 		return entries, fetchedAt, nil
@@ -207,8 +220,52 @@ func (s *server) importEntries(ctx context.Context, client *anilist.Client, user
 	s.importUserID = userID
 	s.importLoadedAt = time.Now().UTC()
 	fetchedAt := s.importLoadedAt
+	s.preparedMu.Lock()
+	s.preparedCache = nil
+	s.preparedMu.Unlock()
 	s.importMu.Unlock()
 	return entries, fetchedAt, nil
+}
+
+// preparedImportStates expands one imported list snapshot once for the
+// effective traversal mode. The single cache entry is intentionally bounded;
+// a changed account, credential, snapshot, cursor, or full-scan setting
+// replaces it. The mutex covers mapping lookup and expansion so concurrent
+// pages cannot duplicate the expensive work.
+func (s *server) preparedImportStates(ctx context.Context, userID int, accessToken string, entries []anilist.ListEntry, fetchedAt, since time.Time, fullScan bool) ([]*pluginv1.WatchSyncRemoteState, error) {
+	key := preparedImportKey{
+		userID:     userID,
+		credential: sha256.Sum256([]byte(accessToken)),
+		snapshotAt: fetchedAt,
+		sinceUnix:  since.Unix(),
+		fullScan:   fullScan,
+	}
+	s.preparedMu.Lock()
+	defer s.preparedMu.Unlock()
+	if s.preparedCache != nil && s.preparedCache.key == key {
+		return s.preparedCache.states, nil
+	}
+	dataset, err := s.mappings.Dataset(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !since.IsZero() && !fullScan {
+		entries = entriesChangedSince(entries, since)
+	}
+	states := remoteStates(entries, dataset)
+	s.preparedCache = &preparedImport{key: key, states: states}
+	return states, nil
+}
+
+func cloneRemoteStates(states []*pluginv1.WatchSyncRemoteState) []*pluginv1.WatchSyncRemoteState {
+	if len(states) == 0 {
+		return nil
+	}
+	cloned := make([]*pluginv1.WatchSyncRemoteState, len(states))
+	for index, state := range states {
+		cloned[index] = proto.Clone(state).(*pluginv1.WatchSyncRemoteState)
+	}
+	return cloned
 }
 
 func requestsWatchedState(kinds []pluginv1.WatchSyncRemoteStateKind) bool {

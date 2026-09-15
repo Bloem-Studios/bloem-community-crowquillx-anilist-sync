@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -734,5 +736,225 @@ func TestListRemoteStateIncrementalCursorSkipsUnchangedEntries(t *testing.T) {
 	next := parseImportCursor(response.GetNextCursor())
 	if next.IsZero() || next.Unix() < 900 {
 		t.Fatalf("next_cursor = %q", response.GetNextCursor())
+	}
+}
+
+func TestListRemoteStateContinuationAvoidsRepeatedExpansion(t *testing.T) {
+	entries := make([]anilist.ListEntry, 256)
+	for index := range entries {
+		entries[index] = anilist.ListEntry{ID: index + 1, MediaID: 10, Status: "CURRENT", Progress: 1}
+		entries[index].Media.ID = 10
+		entries[index].Media.Format = "TV"
+		entries[index].Media.Title.Romaji = "Example Anime"
+	}
+	mappings := mapping.NewClient(&http.Client{Transport: stubMappingTransport{}})
+	newServer := func() *server {
+		return &server{
+			mappings:       mappings,
+			importCache:    entries,
+			importUserID:   7,
+			importLoadedAt: time.Now(),
+		}
+	}
+	request := func(pageToken string) *pluginv1.WatchSyncListRemoteStateRequest {
+		return &pluginv1.WatchSyncListRemoteStateRequest{
+			PageToken: pageToken,
+			PageSize:  1,
+			Context: &pluginv1.WatchSyncAuthenticatedContext{Credentials: &pluginv1.WatchSyncCredentials{
+				AccessToken:      "token",
+				SecretAttributes: map[string]string{"user_id": "7"},
+			}},
+		}
+	}
+
+	warm := newServer()
+	first, err := warm.ListRemoteState(context.Background(), request(""))
+	if err != nil || first.GetFault() != nil {
+		t.Fatalf("first page: %v, fault = %#v", err, first.GetFault())
+	}
+	if len(first.GetItems()) != 1 || first.GetNextPageToken() == "" {
+		t.Fatalf("first page = %#v", first)
+	}
+	continuation, err := warm.ListRemoteState(context.Background(), request(first.GetNextPageToken()))
+	if err != nil || continuation.GetFault() != nil {
+		t.Fatalf("continuation page: %v, fault = %#v", err, continuation.GetFault())
+	}
+	if len(continuation.GetItems()) != 1 {
+		t.Fatalf("continuation page = %#v", continuation)
+	}
+	continuation.GetItems()[0].GetMedia().Title = "caller mutation"
+	unchanged, err := warm.ListRemoteState(context.Background(), request(first.GetNextPageToken()))
+	if err != nil || unchanged.GetFault() != nil {
+		t.Fatalf("repeated continuation page: %v, fault = %#v", err, unchanged.GetFault())
+	}
+	if unchanged.GetItems()[0].GetMedia().GetTitle() != "Example Anime" {
+		t.Fatalf("cached continuation was mutated through response: %#v", unchanged.GetItems()[0])
+	}
+
+	firstAllocs := testing.AllocsPerRun(5, func() {
+		response, err := newServer().ListRemoteState(context.Background(), request(""))
+		if err != nil || response.GetFault() != nil {
+			panic("first page failed")
+		}
+	})
+	continuationAllocs := testing.AllocsPerRun(5, func() {
+		response, err := warm.ListRemoteState(context.Background(), request(first.GetNextPageToken()))
+		if err != nil || response.GetFault() != nil {
+			panic("continuation page failed")
+		}
+	})
+	if continuationAllocs >= firstAllocs/2 {
+		t.Fatalf("continuation allocations = %.0f, first-page allocations = %.0f; continuation still expands the full list", continuationAllocs, firstAllocs)
+	}
+}
+
+func TestListRemoteStatePreparedCacheTracksCursorAndFullScanMode(t *testing.T) {
+	entries := []anilist.ListEntry{
+		{ID: 1, MediaID: 10, Status: "CURRENT", Progress: 1, UpdatedAt: 100},
+		{ID: 2, MediaID: 11, Status: "CURRENT", Progress: 1, UpdatedAt: 900},
+	}
+	for index := range entries {
+		entries[index].Media.ID = entries[index].MediaID
+		entries[index].Media.Format = "TV"
+		entries[index].Media.Title.Romaji = "Example Anime"
+	}
+	srv := &server{
+		mappings:       mapping.NewClient(&http.Client{Transport: stubMappingTransport{}}),
+		importCache:    entries,
+		importUserID:   7,
+		importLoadedAt: time.Now(),
+	}
+	request := func(cursor string, fullScan bool) *pluginv1.WatchSyncListRemoteStateRequest {
+		return &pluginv1.WatchSyncListRemoteStateRequest{
+			Cursor:   cursor,
+			PageSize: 25,
+			Context: &pluginv1.WatchSyncAuthenticatedContext{
+				Credentials: &pluginv1.WatchSyncCredentials{
+					AccessToken:      "token",
+					SecretAttributes: map[string]string{"user_id": "7"},
+				},
+				ProviderConfig: &pluginv1.WatchSyncProviderConfig{Values: map[string]string{
+					"provider.import_full_scan": strconv.FormatBool(fullScan),
+				}},
+			},
+		}
+	}
+
+	response, err := srv.ListRemoteState(context.Background(), request("inc:900", false))
+	if err != nil || response.GetFault() != nil {
+		t.Fatalf("latest incremental response: %v, fault = %#v", err, response.GetFault())
+	}
+	if len(response.GetItems()) != 1 || response.GetItems()[0].GetProviderItemKey() != "anilist:2:s1:e1" {
+		t.Fatalf("latest incremental items = %#v", response.GetItems())
+	}
+
+	response, err = srv.ListRemoteState(context.Background(), request("inc:100", false))
+	if err != nil || response.GetFault() != nil {
+		t.Fatalf("older incremental response: %v, fault = %#v", err, response.GetFault())
+	}
+	if len(response.GetItems()) != 2 {
+		t.Fatalf("older incremental items = %#v, want both entries", response.GetItems())
+	}
+
+	response, err = srv.ListRemoteState(context.Background(), request("inc:900", true))
+	if err != nil || response.GetFault() != nil {
+		t.Fatalf("full-scan response: %v, fault = %#v", err, response.GetFault())
+	}
+	if len(response.GetItems()) != 2 || !response.GetCompleteSnapshot() {
+		t.Fatalf("full-scan items = %#v, complete = %v", response.GetItems(), response.GetCompleteSnapshot())
+	}
+}
+
+func TestListRemoteStateCachesEmptyImport(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls++
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"MediaListCollection": map[string]any{
+			"lists": []any{},
+		}}})
+	}))
+	defer upstream.Close()
+	oldEndpoint := anilist.Endpoint
+	anilist.Endpoint = upstream.URL
+	t.Cleanup(func() { anilist.Endpoint = oldEndpoint })
+
+	srv := &server{mappings: mapping.NewClient(&http.Client{Transport: stubMappingTransport{}})}
+	request := &pluginv1.WatchSyncListRemoteStateRequest{
+		PageSize: 25,
+		Context: &pluginv1.WatchSyncAuthenticatedContext{Credentials: &pluginv1.WatchSyncCredentials{
+			AccessToken:      "token",
+			SecretAttributes: map[string]string{"user_id": "7"},
+		}},
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		response, err := srv.ListRemoteState(context.Background(), request)
+		if err != nil || response.GetFault() != nil {
+			t.Fatalf("empty import attempt %d: %v, fault = %#v", attempt+1, err, response.GetFault())
+		}
+		if len(response.GetItems()) != 0 || response.GetNextCursor() == "" {
+			t.Fatalf("empty import attempt %d response = %#v", attempt+1, response)
+		}
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("empty import upstream calls = %d, want one cached request", upstreamCalls)
+	}
+}
+
+func TestListRemoteStateConcurrentPagesSharePreparedSnapshot(t *testing.T) {
+	entries := make([]anilist.ListEntry, 64)
+	for index := range entries {
+		entries[index] = anilist.ListEntry{ID: index + 1, MediaID: 10, Status: "CURRENT", Progress: 1}
+		entries[index].Media.ID = 10
+		entries[index].Media.Format = "TV"
+		entries[index].Media.Title.Romaji = "Example Anime"
+	}
+	srv := &server{
+		mappings:       mapping.NewClient(&http.Client{Transport: stubMappingTransport{}}),
+		importCache:    entries,
+		importUserID:   7,
+		importLoadedAt: time.Now(),
+	}
+	request := func(pageToken string) *pluginv1.WatchSyncListRemoteStateRequest {
+		return &pluginv1.WatchSyncListRemoteStateRequest{
+			PageToken: pageToken,
+			PageSize:  1,
+			Context: &pluginv1.WatchSyncAuthenticatedContext{Credentials: &pluginv1.WatchSyncCredentials{
+				AccessToken:      "token",
+				SecretAttributes: map[string]string{"user_id": "7"},
+			}},
+		}
+	}
+	first, err := srv.ListRemoteState(context.Background(), request(""))
+	if err != nil || first.GetFault() != nil || first.GetNextPageToken() == "" {
+		t.Fatalf("first page: %v, response = %#v", err, first)
+	}
+
+	const callers = 8
+	responses := make(chan *pluginv1.WatchSyncListRemoteStateResponse, callers)
+	errs := make(chan error, callers)
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(callers)
+	for range callers {
+		go func() {
+			defer waitGroup.Done()
+			response, err := srv.ListRemoteState(context.Background(), request(first.GetNextPageToken()))
+			if err != nil {
+				errs <- err
+				return
+			}
+			responses <- response
+		}()
+	}
+	waitGroup.Wait()
+	close(responses)
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	for response := range responses {
+		if response.GetFault() != nil || len(response.GetItems()) != 1 ||
+			response.GetItems()[0].GetProviderItemKey() != "anilist:2:s1:e1" {
+			t.Fatalf("concurrent continuation response = %#v", response)
+		}
 	}
 }
