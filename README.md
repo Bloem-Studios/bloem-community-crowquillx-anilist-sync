@@ -9,7 +9,7 @@ An AniList watch-sync provider for [Silo Server](https://github.com/Silo-Server/
 > only copy of your watch state. The device activation flow shipped in v0.5.0
 > and is live in production.
 
-`main` contains the `v0.6.1` manifest and targets
+`main` contains the `v0.7.0` manifest and targets
 [`silo-plugin-sdk` v0.13.0](https://github.com/Silo-Server/silo-plugin-sdk/releases/tag/v0.13.0).
 Plugin-backed watch providers landed in Silo Server through
 [Silo Server PR #475](https://github.com/Silo-Server/silo-server/pull/475).
@@ -28,6 +28,8 @@ described below.
   disabled-by-default setting.
 - Optionally limits exports to anime already on the connected AniList account's
   list, preventing false matches from adding unexpected titles.
+- Adds an optional Silo watched check for Neptune/Jellycompat players that
+  report a stop at zero.
 - Imports mapped AniList watch history into Silo.
 - Connects profiles through a device activation flow. The browser encrypts
   the token to a key derived from the activation code, and the bridge never
@@ -52,29 +54,52 @@ described below.
 Enable **Sync manually marked watched items** only if manual marks should
 advance AniList.
 
-### Fallback: manual token
+### Neptune and Jellycompat watched verification
 
-The device flow is the default. If the connect bridge is unavailable and the
-plugin is rebuilt with the `API_KEY` auth method restored in `manifest.json`,
-you can still connect by pasting a token:
+Some players send a final stop with position zero after Silo has already saved
+an episode as watched. The ordinary AniList provider skips that stop because
+its completion percentage is zero. Version 0.7.0 adds **AniList with Silo
+watched check** for this case.
 
-1. Open the AniList authorize URL:
+To enable it for a profile:
 
-   ```text
-   https://anilist.co/api/v2/oauth/authorize?client_id=49797&response_type=token
-   ```
+1. Update AniList Sync to v0.7.0 or later.
+2. Obtain an AniList access token using this authorization link:
+   [Authorize AniList Sync](https://anilist.co/api/v2/oauth/authorize?client_id=49797&response_type=token).
+   Approve access and copy the token shown by AniList.
+3. Create a Silo API key for the account that owns the profile. Get the current
+   profile's `id` from `GET /api/v1/profiles`, authenticated with that key.
+4. In that same profile, open **Settings → Watch Providers → AniList with Silo
+   watched check → Connect**. Paste the **AniList token** in the main API-key
+   field. Enter the native Silo server URL, **Silo API key**, and **Silo profile
+   ID** in the additional fields. Use HTTPS for remote servers. The URL must
+   be reachable from the Silo server running the plugin.
+5. Once the new connection succeeds, disconnect the ordinary **AniList**
+   provider for this profile to avoid duplicate imports and exports. Enable
+   playback scrobbling on the new connection and select your import settings.
 
-   The client ID belongs to the bundled Silo AniList Sync AniList
-   application; advanced users may substitute their own application's client
-   ID, whose redirect URL must be set to
-   `https://anilist.co/api/v2/oauth/pin`.
+The plugin checks that the API key can access the selected profile when you
+connect and again before each watched lookup. Credentials and the selected
+profile are stored with that connection, encrypted by Silo. This setup needs
+no database access or Silo server changes. The separate provider is necessary
+because Silo currently supports connection settings only for API-key auth.
 
-2. Approve the application and copy the access token shown by AniList.
-3. In the desired Silo profile, open **Settings → Watch Providers**, find
-   **AniList**, and select **Connect**, then paste the token. Silo validates
-   the token immediately and shows the connected account.
+Only a stop with zero position, zero completion percentage, a known duration,
+and an exact Silo item ID triggers verification. The plugin reads
+`GET /api/v1/catalog/items/{id}` with `X-Profile-Id` and proceeds only if the
+returned item ID matches and `user_state.played` is true. Unwatched or missing
+items stay unchanged. Temporary API failures return a retryable error.
+Ordinary completed playback, mapping checks, the existing-entry restriction,
+and monotonic AniList progress use the same rules as the standard provider.
 
-The token AniList calls an access token is what Silo's connect prompt accepts.
+Select the same profile as the watch-provider connection. Silo does not send
+the connection's profile ID to the plugin, so it can validate ownership but
+cannot detect a different accessible profile selected by mistake. Existing
+watched state can come from an earlier watch, an import, or a manual mark;
+this fallback confirms saved watched state, not how the latest session ended.
+
+The new connection handles future stops. It does not automatically replay
+previously acknowledged stops, including episodes missed before installation.
 
 ### Provider settings
 

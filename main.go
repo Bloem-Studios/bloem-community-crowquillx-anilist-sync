@@ -74,6 +74,9 @@ func (s *server) ExchangeAPIKey(ctx context.Context, req *pluginv1.WatchSyncExch
 	// and returns the connected account; a bad or revoked token now fails the
 	// connect with an INVALID_CREDENTIAL fault instead of at first sync. AniList
 	// tokens live ~1 year; the decoded exp lets the host warn before expiry.
+	if req.GetCapabilityId() == siloVerifiedCapability {
+		return s.exchangeVerifiedCredential(ctx, req, token)
+	}
 	return credentialResponse(ctx, token, "Bearer", anilist.TokenExpiresAt(token))
 }
 
@@ -358,9 +361,17 @@ func (s *server) ApplyEvents(ctx context.Context, req *pluginv1.WatchSyncApplyEv
 		return &pluginv1.WatchSyncApplyEventsResponse{}, nil
 	}
 	behavior := watchBehaviorFromConfig(req.GetContext().GetProviderConfig())
+	verified := make([]bool, len(req.GetEvents()))
+	results := make([]*pluginv1.WatchSyncApplyResult, len(req.GetEvents()))
 	needsMapping := false
-	for _, event := range req.GetEvents() {
-		needsMapping = needsMapping || appliesWatchedState(event, behavior)
+	for i, event := range req.GetEvents() {
+		var err error
+		verified[i], err = verifyZeroStop(ctx, req.GetContext(), event)
+		if err != nil {
+			results[i] = siloVerificationErrorResult(event.GetEventId(), err)
+			continue
+		}
+		needsMapping = needsMapping || verified[i] || appliesWatchedState(event, behavior)
 	}
 	var dataset mapping.Catalog
 	var client *anilist.Client
@@ -372,9 +383,10 @@ func (s *server) ApplyEvents(ctx context.Context, req *pluginv1.WatchSyncApplyEv
 		}
 		client = anilist.NewClient(req.GetContext().GetCredentials().GetAccessToken(), nil)
 	}
-	results := make([]*pluginv1.WatchSyncApplyResult, 0, len(req.GetEvents()))
-	for _, event := range req.GetEvents() {
-		results = append(results, applyEvent(ctx, client, dataset, event, behavior))
+	for i, event := range req.GetEvents() {
+		if results[i] == nil {
+			results[i] = applyVerifiedEvent(ctx, client, dataset, event, behavior, verified[i])
+		}
 	}
 	return &pluginv1.WatchSyncApplyEventsResponse{Results: results}, nil
 }
@@ -412,6 +424,10 @@ func appliesWatchedState(event *pluginv1.WatchSyncEvent, behavior watchBehavior)
 }
 
 func applyEvent(ctx context.Context, client *anilist.Client, dataset mapping.Catalog, event *pluginv1.WatchSyncEvent, behavior watchBehavior) *pluginv1.WatchSyncApplyResult {
+	return applyVerifiedEvent(ctx, client, dataset, event, behavior, false)
+}
+
+func applyVerifiedEvent(ctx context.Context, client *anilist.Client, dataset mapping.Catalog, event *pluginv1.WatchSyncEvent, behavior watchBehavior, siloPlayed bool) *pluginv1.WatchSyncApplyResult {
 	result := &pluginv1.WatchSyncApplyResult{EventId: event.GetEventId()}
 	switch event.GetOperation() {
 	case pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_SCROBBLE_START,
@@ -420,7 +436,7 @@ func applyEvent(ctx context.Context, client *anilist.Client, dataset mapping.Cat
 		return result
 	case pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_SCROBBLE_STOP,
 		pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_MARK_WATCHED:
-		if !appliesWatchedState(event, behavior) {
+		if !appliesWatchedState(event, behavior) && !(siloPlayed && event.GetOperation() == pluginv1.WatchSyncOperation_WATCH_SYNC_OPERATION_SCROBBLE_STOP) {
 			result.Status = pluginv1.WatchSyncApplyStatus_WATCH_SYNC_APPLY_STATUS_NO_CHANGE
 			return result
 		}

@@ -136,7 +136,7 @@ func TestManifestAdvertisesWatchedImportAndDeviceCodeConfiguration(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.GetCapabilities()) != 1 {
+	if len(manifest.GetCapabilities()) != 2 {
 		t.Fatalf("capabilities = %#v", manifest.GetCapabilities())
 	}
 	descriptor := manifest.GetCapabilities()[0].GetWatchSyncProvider()

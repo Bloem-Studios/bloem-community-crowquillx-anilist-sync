@@ -1,6 +1,6 @@
 {
   "plugin_id": "dev.crowquillx.anilist-sync",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
   "supported_platforms": [
@@ -44,6 +44,69 @@
         "scrobble_playback": true,
         "max_batch_size": 25
       }
+    },
+    {
+      "type": "watch_sync_provider.v1",
+      "id": "anilist-silo",
+      "display_name": "AniList with Silo watched check",
+      "description": "Checks the selected Silo profile for watched state when a player stops at zero. Connect with an AniList token and a Silo API key.",
+      "watch_sync_provider": {
+        "auth_methods": [
+          "WATCH_SYNC_AUTH_METHOD_API_KEY"
+        ],
+        "export_watched": true,
+        "export_unwatched": false,
+        "import_watched": true,
+        "import_progress": false,
+        "supported_media_types": [
+          "WATCH_SYNC_MEDIA_TYPE_MOVIE",
+          "WATCH_SYNC_MEDIA_TYPE_EPISODE"
+        ],
+        "external_id_namespaces": [
+          "anilist",
+          "imdb",
+          "tmdb",
+          "tvdb"
+        ],
+        "scrobble_playback": true,
+        "max_batch_size": 25
+      },
+      "config_schema": [
+        {
+          "key": "silo",
+          "title": "Silo watched verification",
+          "description": "Use the same Silo account and profile as this watch-provider connection.",
+          "required": true,
+          "json_schema": "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"base_url\":{\"type\":\"string\",\"format\":\"uri\",\"minLength\":1},\"api_key\":{\"type\":\"string\",\"format\":\"password\",\"minLength\":1},\"profile_id\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"base_url\",\"api_key\",\"profile_id\"]}",
+          "admin_form": {
+            "fields": [
+              {
+                "key": "base_url",
+                "label": "Silo server URL",
+                "description": "The native Silo server URL reachable from the plugin, for example https://silo.example.com. Use HTTPS for remote servers.",
+                "control": "ADMIN_FORM_CONTROL_TEXT",
+                "required": true
+              },
+              {
+                "key": "api_key",
+                "label": "Silo API key",
+                "description": "An API key for the Silo account that owns this profile. Stored with this connection.",
+                "control": "ADMIN_FORM_CONTROL_PASSWORD",
+                "secret": true,
+                "required": true
+              },
+              {
+                "key": "profile_id",
+                "label": "Silo profile ID",
+                "description": "The ID of the profile you are connecting. Copy its id from GET /api/v1/profiles.",
+                "control": "ADMIN_FORM_CONTROL_TEXT",
+                "required": true
+              }
+            ],
+            "submit_label": "Connect AniList"
+          }
+        }
+      ]
     }
   ],
   "global_config_schema": [
@@ -100,7 +163,7 @@
     "display_name": "AniList Sync",
     "summary": "Reliably synchronize completed anime with AniList through Silo's watch-provider pipeline.",
     "description_markdown": "Uses Silo's host-owned watch-sync pipeline for encrypted per-profile credentials, durable playback completion delivery, optional manual watched marks, retries, imports, and rich episode identity. Episode exports prefer the daily AniBridge v3 dataset, with an Anime-Lists and ARM fallback. Watch-history imports reverse-map AniList progress through AniBridge. AniList progress is monotonic and ambiguous mappings are rejected rather than guessed.",
-    "setup_markdown": "Install the plugin and match the playback completion threshold to Silo's watched threshold. To connect a profile, open Settings → Watch Providers → AniList and select Connect. Silo shows a code and a button that opens the activation page; enter the code, approve access on AniList, and return to Silo — the connection completes automatically and shows your account. AniList tokens last about one year; reconnect when the credential expires. A manual paste flow remains documented in the plugin README as a fallback.",
+    "setup_markdown": "Install the plugin and match the playback completion threshold to Silo's watched threshold. To connect a profile, open Settings \u2192 Watch Providers \u2192 AniList and select Connect. Silo shows a code and a button that opens the activation page; enter the code, approve access on AniList, and return to Silo \u2014 the connection completes automatically and shows your account. AniList tokens last about one year; reconnect when the credential expires. A manual paste flow remains documented in the plugin README as a fallback. For Neptune or Jellycompat players that report a stop at zero, connect the optional AniList with Silo watched check provider using an AniList access token, your Silo server URL, a Silo API key, and the current Silo profile ID. This connection checks saved watched state for that exact item and profile. See the README for setup; disconnect the ordinary AniList provider for that profile to avoid duplicate synchronization.",
     "homepage_url": "https://github.com/crowquillx/silo-anilist-sync",
     "source_url": "https://github.com/crowquillx/silo-anilist-sync",
     "support_url": "https://github.com/crowquillx/silo-anilist-sync/issues",
