@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
-	publicmanifest "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/manifest"
-	"github.com/crowquillx/silo-anilist-sync/anilist"
-	"github.com/crowquillx/silo-anilist-sync/mapping"
+	pluginv1 "github.com/Bloem-Studios/bloem-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
+	publicmanifest "github.com/Bloem-Studios/bloem-plugin-sdk/pkg/pluginsdk/manifest"
+	"github.com/Bloem-Studios/bloem-community-crowquillx-anilist-sync/anilist"
+	"github.com/Bloem-Studios/bloem-community-crowquillx-anilist-sync/mapping"
 )
 
 func TestExchangeAPIKeyConnectsAndSetsExpiry(t *testing.T) {

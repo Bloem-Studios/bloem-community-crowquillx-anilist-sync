@@ -1,3 +1,12 @@
+## Bloem community build
+
+This is Bloem's community build of [crowquillx/silo-anilist-sync](https://github.com/crowquillx/silo-anilist-sync) by **crowquillx**
+(contributors: crowquillx). It is ported to the Bloem plugin SDK and listed in the
+Bloem community plugin catalog. All credit for the plugin goes to its author; please
+report plugin behavior issues upstream. See [NOTICE](NOTICE) for provenance.
+
+---
+
 # Silo AniList Sync
 
 An AniList watch-sync provider for [Silo Server](https://github.com/Silo-Server/silo-server).

@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
-	"github.com/crowquillx/silo-anilist-sync/anilist"
+	pluginv1 "github.com/Bloem-Studios/bloem-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
+	"github.com/Bloem-Studios/bloem-community-crowquillx-anilist-sync/anilist"
 )
 
 var fixedNow = time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
